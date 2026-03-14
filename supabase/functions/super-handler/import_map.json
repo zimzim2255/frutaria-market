@@ -1,0 +1,8 @@
+{
+  "imports": {
+    "npm:hono": "https://esm.sh/hono@4.0.0",
+    "npm:hono/cors": "https://esm.sh/hono@4.0.0/cors",
+    "npm:hono/logger": "https://esm.sh/hono@4.0.0/logger",
+    "jsr:@supabase/supabase-js@2": "https://esm.sh/@supabase/supabase-js@2.49.8"
+  }
+}

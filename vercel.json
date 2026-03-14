@@ -1,0 +1,12 @@
+{
+  "buildCommand": "npm run build",
+  "devCommand": "npm run dev",
+  "installCommand": "npm install",
+  "framework": "vite",
+  "outputDirectory": "build",
+  "env": {
+    "VITE_SUPABASE_URL": "https://fjvmssmimoujxzqketsx.supabase.co",
+    "VITE_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZqdm1zc21pbW91anh6cWtldHN4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjI5MDI4MDUsImV4cCI6MjA3ODQ3ODgwNX0.rbfn3NbJORX2Cf3LSj01I7wuLJoj7MKtrgwzgp_NqHs"
+  },
+  "regions": ["iad1"]
+}
