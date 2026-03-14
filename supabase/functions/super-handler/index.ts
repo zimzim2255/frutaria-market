@@ -1829,112 +1829,184 @@ async function handler(req: Request): Promise<Response> {
 
   if (path === "/products" && method === "POST") {
     try {
-      const body = await req.json();
-      const currentUser = await getCurrentUser(req);
-      
-      // Admin can create stock for a specific magasin by passing store_id.
-      // Non-admin users are restricted to their own store_id.
+      const body = await req.json().catch(() => ({}));
       const currentUserWithRole = await getCurrentUserWithRole(req);
-      const requestedStoreId = body.store_id ? String(body.store_id) : null;
-      const resolvedStoreId = (currentUserWithRole?.role === "admin")
-        ? requestedStoreId
-        : (currentUserWithRole?.store_id ? String(currentUserWithRole.store_id) : null);
+      const authUser = await getCurrentUser(req);
 
-      // ALWAYS create a new product record for this store
-      // Don't reuse existing products - each store gets their own record
-      const { data: newProduct, error: createError } = await supabase
-        .from("products")
-        .insert([
-          {
-            name: body.name,
-            reference: body.reference,
-            stock_reference: body.stock_reference || null,
-            category: body.category,
-            quantity_available: body.quantity_available || 0, // Use Caisse (quantity_available) as stock
-            purchase_price: body.purchase_price || 0,
-            sale_price: body.sale_price || 0,
-            supplier_id: body.supplier_id || null,
-            number_of_boxes: body.number_of_boxes || 0,
-            total_net_weight: body.total_net_weight || 0,
-            avg_net_weight_per_box: body.avg_net_weight_per_box || 0, // Store as DECIMAL (16.50)
-            max_purchase_limit: body.max_purchase_limit || null,
-            fourchette_min: body.fourchette_min || null,
-            fourchette_max: body.fourchette_max || null,
-            van_delivery_attachment_url: body.van_delivery_attachment_url || null,
-            van_delivery_attachment_type: body.van_delivery_attachment_type || null,
-            van_delivery_notes: body.van_delivery_notes || null,
-            created_by: currentUser?.id || null,
-            // Ensure product is associated with the magasin for correct stock grouping/filtering
-            store_id: resolvedStoreId,
-          },
-        ])
-        .select();
+      if (!currentUserWithRole) return jsonResponse({ error: "Unauthorized" }, 401);
 
-      if (createError) throw createError;
-      const productId = newProduct?.[0]?.id;
-      console.log(`Created new product with ID: ${productId}`);
+      const role = normalizeRole(currentUserWithRole.role);
+      const isAdmin = role === 'admin';
 
-      // Determine target store for store_stocks row.
-      // - Admin can specify store_id
-      // - Non-admin is forced to their own store
-      const storeId = resolvedStoreId;
+      // Resolve store_id (admin can choose, others are forced)
+      const requestedStoreId = body.store_id ? String(body.store_id).trim() : null;
+      const metaStoreId = String((currentUserWithRole as any)?.user_metadata?.store_id || '').trim() || null;
+      const myStoreId = (currentUserWithRole.store_id ? String(currentUserWithRole.store_id).trim() : null) || metaStoreId;
+      const effectiveStoreId = isAdmin ? requestedStoreId : myStoreId;
 
-      if (storeId) {
-        // Ensure store stock row exists for this store.
-        // Use UPSERT so creating the same product twice for same store doesn't break.
-        const qty = body.quantity_available || 0;
-        const { error: upsertErr } = await supabase
-          .from("store_stocks")
-          .upsert(
-            [{ product_id: productId, store_id: storeId, quantity: qty }],
-            { onConflict: "product_id,store_id" }
-          );
-
-        if (upsertErr) throw upsertErr;
-        console.log(`Upserted store stock for product ${productId} in store ${storeId} with quantity ${qty}`);
-      } else {
-        console.warn("No store_id resolved; store_stocks entry not created");
+      if (!effectiveStoreId) {
+        return jsonResponse({ error: "store_id is required" }, 400);
       }
 
-      // Fetch the complete product with store stocks
-      const { data: product, error: fetchError } = await supabase
-        .from("products")
-        .select("*")
-        .eq("id", productId)
-        .single();
+      const rawReference = String(body.reference || '').trim();
+      if (!rawReference) return jsonResponse({ error: "reference is required" }, 400);
+      const normalizedReference = rawReference.toLowerCase();
 
-      if (fetchError) throw fetchError;
+      const caisseDelta = toNum(body.quantity_available ?? 0);
+      const boxesDelta = toNum(body.number_of_boxes ?? 0);
 
-      // Write immutable history snapshot (Ajout Stock)
-      // Mapping must match current UI:
-      //  - Caisse   = quantity_available
-      //  - Quantité = number_of_boxes
-      //  - Moyenne  = avg_net_weight_per_box else Quantité/Caisse
-      //  - Valeur Totale = Caisse * Prix d'Achat
+      // Find existing product in the SAME store (case/space insensitive)
+      // We cannot rely on DB constraints right now because migration state differs.
+      const { data: existingProducts, error: findErr } = await supabase
+        .from('products')
+        .select('*')
+        .eq('store_id', effectiveStoreId)
+        .limit(5000);
+      if (findErr) throw findErr;
+
+      const existing = (existingProducts || []).find((p: any) => {
+        const ref = String(p?.reference || '').trim().toLowerCase();
+        return ref === normalizedReference;
+      });
+
+      let productId: string;
+      let productRow: any;
+      let restocked = false;
+
+      if (existing?.id) {
+        // RESTOCK existing product for that store
+        restocked = true;
+        productId = String(existing.id);
+
+        const patch: any = {
+          updated_at: new Date().toISOString(),
+        };
+
+        // Optional metadata updates: keep existing values if not provided
+        if (body.name !== undefined) patch.name = body.name;
+        if (body.category !== undefined) patch.category = body.category;
+        if (body.supplier_id !== undefined) patch.supplier_id = body.supplier_id || null;
+        if (body.purchase_price !== undefined) patch.purchase_price = body.purchase_price || 0;
+        if (body.sale_price !== undefined) patch.sale_price = body.sale_price || 0;
+        if (body.avg_net_weight_per_box !== undefined) patch.avg_net_weight_per_box = body.avg_net_weight_per_box || 0;
+        if (body.total_net_weight !== undefined) patch.total_net_weight = body.total_net_weight || 0;
+        if (body.max_purchase_limit !== undefined) patch.max_purchase_limit = body.max_purchase_limit || null;
+        if (body.fourchette_min !== undefined) patch.fourchette_min = body.fourchette_min || null;
+        if (body.fourchette_max !== undefined) patch.fourchette_max = body.fourchette_max || null;
+        if (body.van_delivery_attachment_url !== undefined) patch.van_delivery_attachment_url = body.van_delivery_attachment_url || null;
+        if (body.van_delivery_attachment_type !== undefined) patch.van_delivery_attachment_type = body.van_delivery_attachment_type || null;
+        if (body.van_delivery_notes !== undefined) patch.van_delivery_notes = body.van_delivery_notes || null;
+        if (body.stock_reference !== undefined) patch.stock_reference = body.stock_reference || existing.stock_reference || null;
+
+        // quantity_available = caisse (stock)
+        const newCaisse = toNum(existing.quantity_available ?? 0) + caisseDelta;
+        patch.quantity_available = newCaisse;
+
+        // number_of_boxes = quantite
+        const newBoxes = toNum(existing.number_of_boxes ?? 0) + boxesDelta;
+        patch.number_of_boxes = newBoxes;
+
+        const { data: updated, error: updErr } = await supabase
+          .from('products')
+          .update(patch)
+          .eq('id', productId)
+          .select('*')
+          .maybeSingle();
+        if (updErr) throw updErr;
+
+        productRow = updated || { ...existing, ...patch };
+
+        // Update store_stocks for this product/store
+        const { data: ssRow, error: ssFindErr } = await supabase
+          .from('store_stocks')
+          .select('quantity')
+          .eq('product_id', productId)
+          .eq('store_id', effectiveStoreId)
+          .maybeSingle();
+        if (ssFindErr) throw ssFindErr;
+
+        const currentQty = toNum(ssRow?.quantity ?? 0);
+        const newQty = currentQty + caisseDelta;
+
+        const { error: ssUpsertErr } = await supabase
+          .from('store_stocks')
+          .upsert(
+            [{ product_id: productId, store_id: effectiveStoreId, quantity: newQty }],
+            { onConflict: 'product_id,store_id' }
+          );
+        if (ssUpsertErr) throw ssUpsertErr;
+      } else {
+        // CREATE new product for that store (first time)
+        const { data: createdRows, error: createError } = await supabase
+          .from('products')
+          .insert([
+            {
+              name: body.name,
+              reference: rawReference,
+              stock_reference: body.stock_reference || null,
+              category: body.category,
+              quantity_available: caisseDelta,
+              purchase_price: body.purchase_price || 0,
+              sale_price: body.sale_price || 0,
+              supplier_id: body.supplier_id || null,
+              number_of_boxes: boxesDelta,
+              total_net_weight: body.total_net_weight || 0,
+              avg_net_weight_per_box: body.avg_net_weight_per_box || 0,
+              max_purchase_limit: body.max_purchase_limit || null,
+              fourchette_min: body.fourchette_min || null,
+              fourchette_max: body.fourchette_max || null,
+              van_delivery_attachment_url: body.van_delivery_attachment_url || null,
+              van_delivery_attachment_type: body.van_delivery_attachment_type || null,
+              van_delivery_notes: body.van_delivery_notes || null,
+              created_by: authUser?.id || null,
+              store_id: effectiveStoreId,
+            },
+          ])
+          .select('*')
+          .limit(1);
+
+        if (createError) throw createError;
+        const created = createdRows?.[0];
+        if (!created?.id) throw new Error('Failed to create product');
+
+        productId = String(created.id);
+        productRow = created;
+
+        // Ensure store_stocks row
+        const { error: ssUpsertErr } = await supabase
+          .from('store_stocks')
+          .upsert(
+            [{ product_id: productId, store_id: effectiveStoreId, quantity: caisseDelta }],
+            { onConflict: 'product_id,store_id' }
+          );
+        if (ssUpsertErr) throw ssUpsertErr;
+      }
+
+      // History snapshot
       try {
-        const caisse = toNum(body.quantity_available ?? product.quantity_available ?? 0);
-        const quantite = toNum(body.number_of_boxes ?? product.number_of_boxes ?? 0);
-        const purchase = toNum(body.purchase_price ?? product.purchase_price ?? 0);
-        const moyenneDb = toNum(body.avg_net_weight_per_box ?? product.avg_net_weight_per_box ?? 0);
+        const caisse = caisseDelta;
+        const quantite = boxesDelta;
+        const purchase = toNum(body.purchase_price ?? productRow.purchase_price ?? 0);
+        const moyenneDb = toNum(body.avg_net_weight_per_box ?? productRow.avg_net_weight_per_box ?? 0);
         const moyenne = moyenneDb > 0 ? moyenneDb : (caisse > 0 && quantite > 0 ? round2(quantite / caisse) : 0);
         const totalValue = caisse * purchase;
 
         await insertProductAdditionHistoryRow({
-          created_at: product.created_at || new Date().toISOString(),
-          created_by: currentUser?.id || null,
-          created_by_email: currentUser?.email || null,
-          store_id: storeId || null,
+          created_at: new Date().toISOString(),
+          created_by: authUser?.id || null,
+          created_by_email: authUser?.email || null,
+          store_id: effectiveStoreId,
           product_id: String(productId),
-          stock_reference: product.stock_reference || body.stock_reference || null,
-          reference: product.reference || body.reference || null,
-          name: product.name || body.name || null,
-          category: product.category || body.category || null,
-          supplier_id: product.supplier_id || body.supplier_id || null,
-          lot: product.lot || body.lot || null,
+          stock_reference: productRow.stock_reference || body.stock_reference || null,
+          reference: productRow.reference || rawReference || null,
+          name: productRow.name || body.name || null,
+          category: productRow.category || body.category || null,
+          supplier_id: productRow.supplier_id || body.supplier_id || null,
+          lot: productRow.lot || body.lot || null,
           purchase_price: purchase,
-          sale_price: toNum(body.sale_price ?? product.sale_price ?? 0),
-          fourchette_min: body.fourchette_min ?? product.fourchette_min ?? null,
-          fourchette_max: body.fourchette_max ?? product.fourchette_max ?? null,
+          sale_price: toNum(body.sale_price ?? productRow.sale_price ?? 0),
+          fourchette_min: body.fourchette_min ?? productRow.fourchette_min ?? null,
+          fourchette_max: body.fourchette_max ?? productRow.fourchette_max ?? null,
           caisse,
           quantite,
           moyenne,
@@ -1942,12 +2014,204 @@ async function handler(req: Request): Promise<Response> {
         });
       } catch (e) {
         console.error('[products POST] Failed to insert product_additions_history row:', e);
-        // Do not fail the main flow; stock add must continue to work.
       }
 
-      return jsonResponse({ success: true, product });
+      return jsonResponse({ success: true, restocked, product: productRow });
     } catch (error: any) {
-      console.error("Error creating product:", error);
+      console.error("Error creating/restocking product:", error);
+      return jsonResponse({ error: error.message }, 500);
+    }
+  }
+
+  // PUT /products/:id
+  // IMPORTANT:
+  // This endpoint is used by the "Ajouter un produit" flow to restock an existing product.
+  // It MUST NOT create a new products row when stock_reference changes.
+  // Duplicates must only be possible across different stores (magasins), not within the same store.
+  if (path.startsWith("/products/") && method === "PUT") {
+    try {
+      const productId = path.split("/")[2];
+      const body = await req.json().catch(() => ({}));
+
+      const currentUserWithRole = await getCurrentUserWithRole(req);
+      const authUser = await getCurrentUser(req);
+      if (!currentUserWithRole) return jsonResponse({ error: "Unauthorized" }, 401);
+
+      const role = normalizeRole(currentUserWithRole.role);
+      const isAdmin = role === 'admin';
+
+      // Resolve effective store_id (admin can choose, others forced)
+      const requestedStoreId = body.store_id ? String(body.store_id).trim() : null;
+      const metaStoreId = String((currentUserWithRole as any)?.user_metadata?.store_id || '').trim() || null;
+      const myStoreId = (currentUserWithRole.store_id ? String(currentUserWithRole.store_id).trim() : null) || metaStoreId;
+      const effectiveStoreId = isAdmin ? requestedStoreId : myStoreId;
+
+      if (!effectiveStoreId) return jsonResponse({ error: "store_id is required" }, 400);
+
+      // Load current product
+      const { data: currentProduct, error: fetchErr } = await supabase
+        .from('products')
+        .select('*')
+        .eq('id', productId)
+        .maybeSingle();
+      if (fetchErr) throw fetchErr;
+      if (!currentProduct) return jsonResponse({ error: 'Product not found' }, 404);
+
+      // Security: non-admin can only update products within their store
+      const productStoreId = currentProduct.store_id ? String(currentProduct.store_id) : null;
+      if (!isAdmin) {
+        if (!productStoreId || String(productStoreId) !== String(effectiveStoreId)) {
+          return jsonResponse({ error: 'Unauthorized' }, 403);
+        }
+      }
+
+      // If admin targets a different store than the current product.store_id,
+      // then restock that store's product of same reference (or create if first time).
+      const rawReference = String(currentProduct.reference || '').trim();
+      const normalizedReference = rawReference.toLowerCase();
+
+      const caisseDelta = toNum(body.quantity_available ?? 0);
+      const boxesDelta = toNum(body.number_of_boxes ?? 0);
+
+      // Find an existing product for the TARGET store by reference (case/space-insensitive)
+      const { data: storeProducts, error: spErr } = await supabase
+        .from('products')
+        .select('*')
+        .eq('store_id', effectiveStoreId)
+        .limit(5000);
+      if (spErr) throw spErr;
+
+      const storeMatch = (storeProducts || []).find((p: any) => {
+        const ref = String(p?.reference || '').trim().toLowerCase();
+        return ref === normalizedReference;
+      });
+
+      // Target product is:
+      // - same row if it's already in that store
+      // - otherwise the matched product in that store
+      // - otherwise we create first-time product for that store
+      let targetProduct: any = null;
+      if (storeMatch?.id) targetProduct = storeMatch;
+
+      // Create if missing for that store
+      if (!targetProduct) {
+        const { data: createdRows, error: createErr } = await supabase
+          .from('products')
+          .insert([
+            {
+              name: currentProduct.name,
+              reference: currentProduct.reference,
+              category: currentProduct.category,
+              supplier_id: currentProduct.supplier_id,
+              purchase_price: currentProduct.purchase_price || 0,
+              sale_price: currentProduct.sale_price || 0,
+              total_net_weight: currentProduct.total_net_weight || 0,
+              avg_net_weight_per_box: currentProduct.avg_net_weight_per_box || 0,
+              max_purchase_limit: currentProduct.max_purchase_limit || null,
+              fourchette_min: currentProduct.fourchette_min || null,
+              fourchette_max: currentProduct.fourchette_max || null,
+              van_delivery_attachment_url: currentProduct.van_delivery_attachment_url || null,
+              van_delivery_attachment_type: currentProduct.van_delivery_attachment_type || null,
+              van_delivery_notes: currentProduct.van_delivery_notes || null,
+              lot: currentProduct.lot || null,
+              product_category: currentProduct.product_category || null,
+              stock_reference: body.stock_reference || currentProduct.stock_reference || null,
+              quantity_available: caisseDelta,
+              number_of_boxes: boxesDelta,
+              created_by: authUser?.id || null,
+              store_id: effectiveStoreId,
+            },
+          ])
+          .select('*')
+          .limit(1);
+        if (createErr) throw createErr;
+        targetProduct = createdRows?.[0];
+      } else {
+        // Update in-place (NO CLONE). Allow stock_reference to change without creating a new row.
+        const patch: any = { updated_at: new Date().toISOString() };
+
+        // For restock calls, quantities are deltas
+        patch.quantity_available = toNum(targetProduct.quantity_available ?? 0) + caisseDelta;
+        patch.number_of_boxes = toNum(targetProduct.number_of_boxes ?? 0) + boxesDelta;
+
+        // Allow updating stock_reference, but never clone
+        if (body.stock_reference !== undefined) {
+          patch.stock_reference = body.stock_reference || targetProduct.stock_reference || null;
+        }
+
+        // Ignore purchase_price if sent as empty string
+        if (body.purchase_price !== undefined) {
+          const v = body.purchase_price;
+          patch.purchase_price = (v === '' || v === null) ? (targetProduct.purchase_price || 0) : v;
+        }
+
+        const { data: updated, error: updErr } = await supabase
+          .from('products')
+          .update(patch)
+          .eq('id', String(targetProduct.id))
+          .select('*')
+          .maybeSingle();
+        if (updErr) throw updErr;
+        targetProduct = updated || { ...targetProduct, ...patch };
+      }
+
+      // Update store_stocks for the target product/store
+      const { data: ssRow, error: ssFindErr } = await supabase
+        .from('store_stocks')
+        .select('quantity')
+        .eq('product_id', String(targetProduct.id))
+        .eq('store_id', effectiveStoreId)
+        .maybeSingle();
+      if (ssFindErr) throw ssFindErr;
+
+      const currentQty = toNum(ssRow?.quantity ?? 0);
+      const newQty = currentQty + caisseDelta;
+
+      const { error: ssUpsertErr } = await supabase
+        .from('store_stocks')
+        .upsert(
+          [{ product_id: String(targetProduct.id), store_id: effectiveStoreId, quantity: newQty }],
+          { onConflict: 'product_id,store_id' }
+        );
+      if (ssUpsertErr) throw ssUpsertErr;
+
+      // History snapshot (delta)
+      try {
+        const caisse = caisseDelta;
+        const quantite = boxesDelta;
+        const purchase = toNum(body.purchase_price ?? targetProduct.purchase_price ?? 0);
+        const moyenneDb = toNum(targetProduct.avg_net_weight_per_box ?? 0);
+        const moyenne = moyenneDb > 0 ? moyenneDb : (caisse > 0 && quantite > 0 ? round2(quantite / caisse) : 0);
+        const totalValue = caisse * purchase;
+
+        await insertProductAdditionHistoryRow({
+          created_at: new Date().toISOString(),
+          created_by: authUser?.id || null,
+          created_by_email: authUser?.email || null,
+          store_id: effectiveStoreId,
+          product_id: String(targetProduct.id),
+          stock_reference: targetProduct.stock_reference || null,
+          reference: targetProduct.reference || null,
+          name: targetProduct.name || null,
+          category: targetProduct.category || null,
+          supplier_id: targetProduct.supplier_id || null,
+          lot: targetProduct.lot || null,
+          purchase_price: purchase,
+          sale_price: toNum(targetProduct.sale_price ?? 0),
+          fourchette_min: targetProduct.fourchette_min ?? null,
+          fourchette_max: targetProduct.fourchette_max ?? null,
+          caisse,
+          quantite,
+          moyenne,
+          total_value: totalValue,
+        });
+      } catch (e) {
+        console.error('[products PUT] Failed to insert product_additions_history row:', e);
+      }
+
+      return jsonResponse({ success: true, product: targetProduct });
+    } catch (error: any) {
+      console.error('Error updating/restocking product:', error);
       return jsonResponse({ error: error.message }, 500);
     }
   }

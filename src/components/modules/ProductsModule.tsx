@@ -404,19 +404,29 @@ export function ProductsModule({ session }: ProductsModuleProps) {
           const raw = String(name || '').trim();
           if (!raw) return '';
 
-          // If store name is like: "Caisse Admin - admin@gmail.com" => show only "Admin"
-          // If it's like: "Caisse Admin - Admin1" => show "Admin1"
-          // If it's like: "Caisse Admin" => show "Admin"
+          // Goal: avoid showing multiple stores as identical "Admin".
+          // We normalize "Caisse Admin - ..." into a stable, distinguishable label:
+          // - If suffix is a non-email string (ex: "Admin 2", "Admin1") => keep it
+          // - If suffix is an email => derive "AdminN" from the order found in the stores list
+          // - If no suffix => fallback to "Admin"
           const lowered = raw.toLowerCase();
           if (lowered.startsWith('caisse admin')) {
             const parts = raw.split('-').map((p) => p.trim()).filter(Boolean);
-            const tail = parts.length > 1 ? parts[parts.length - 1] : '';
+            const suffix = parts.length > 1 ? parts[parts.length - 1] : '';
 
-            // If tail looks like an email, ignore it.
-            const looksLikeEmail = /@/.test(tail);
-            if (!looksLikeEmail && tail) return tail;
+            const looksLikeEmail = /@/.test(suffix);
+            if (suffix && !looksLikeEmail) {
+              // If user already named it Admin1/Admin2/etc, keep it.
+              return suffix;
+            }
 
-            return 'Admin';
+            // If suffix is an email (or missing), assign Admin1/Admin2/... deterministically
+            // based on the order in the stores array.
+            // We use the index of this raw name among "caisse admin" stores.
+            const adminStores = (data.stores || []).filter((s: any) => String(s?.name || '').trim().toLowerCase().startsWith('caisse admin'));
+            const idx = adminStores.findIndex((s: any) => String(s?.name || '').trim() === raw);
+            const n = idx >= 0 ? idx + 1 : null;
+            return n ? `Admin${n}` : 'Admin';
           }
 
           return raw;
@@ -820,8 +830,13 @@ export function ProductsModule({ session }: ProductsModuleProps) {
           }
 
           // CHECK IF PRODUCT WITH SAME REFERENCE ALREADY EXISTS (same magasin)
+          // IMPORTANT: products are store-specific in DB (unique per store + reference).
+          // When adding a product that already exists for the same magasin, we must UPDATE that row,
+          // not create a duplicate. `products` rows can have reference values with different casing/spaces,
+          // so normalize before matching.
+          const norm = (v: any) => String(v ?? '').trim().toLowerCase();
           const existingProduct = products.find(p =>
-            p.reference === article.reference &&
+            norm(p.reference) === norm(article.reference) &&
             (!targetStoreId || String(p.store_id) === String(targetStoreId))
           );
           
@@ -832,7 +847,7 @@ export function ProductsModule({ session }: ProductsModuleProps) {
             // IMPORTANT: existingProduct comes from `products` (raw rows), not from groupedProducts.
             // `products` rows do NOT have store_stocks populated reliably.
             // Therefore, read the store-specific qty from the already-grouped row.
-            const groupedExisting: any = groupedProducts.find((p: any) => p.reference === article.reference);
+            const groupedExisting: any = groupedProducts.find((p: any) => norm(p.reference) === norm(article.reference));
 
             const storeQty = (groupedExisting?.store_stocks && targetStoreId)
               ? (Number(groupedExisting.store_stocks[String(targetStoreId)]) || 0)
@@ -891,9 +906,17 @@ export function ProductsModule({ session }: ProductsModuleProps) {
               toast.error(`Erreur pour ${article.name || article.reference}: ${error.error || 'Erreur inconnue'}`);
             }
           } else {
-            // CREATE new product if it doesn't exist
-            // Send store_id so backend can create store_stocks for the selected magasin
+            // CREATE new product only if it doesn't exist for this magasin.
+            // Send store_id so backend can create store_stocks for the selected magasin.
             if (targetStoreId) payload.store_id = targetStoreId;
+
+            // Safety: prevent accidental duplicates created by mismatched client-side matching.
+            // If backend enforces uniqueness, it will error; if not, this client-side guard still helps.
+            // (We already checked `existingProduct`, but keep this here as a readable invariant.)
+            if (!payload.reference || !String(payload.reference).trim()) {
+              toast.error(`Référence manquante pour ${article.name || 'article'}`);
+              continue;
+            }
 
             const response = await fetch(
               `https://${projectId}.supabase.co/functions/v1/super-handler/products`,

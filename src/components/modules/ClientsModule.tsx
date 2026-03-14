@@ -244,7 +244,7 @@ export function ClientsModule({ session }: ClientsModuleProps) {
   const fetchClientsData = async () => {
     try {
       setLoading(true);
-      
+
       // First, get the current user's store
       const userResponse = await fetch(
         `https://${projectId}.supabase.co/functions/v1/super-handler/users`,
@@ -255,9 +255,13 @@ export function ClientsModule({ session }: ClientsModuleProps) {
         }
       );
 
+      // IMPORTANT: we need the resolved user role inside this function synchronously.
+      // Do not rely on React state updates.
+      let currentUser: any = null;
+
       if (userResponse.ok) {
-      const userData = await userResponse.json();
-      const currentUser = userData.users?.find((u: any) => u.email === session.user?.email);
+        const userData = await userResponse.json();
+        currentUser = userData.users?.find((u: any) => u.email === session.user?.email) || null;
       
       if (currentUser) {
       setCurrentUserRole(currentUser.role || 'user');
@@ -311,6 +315,20 @@ export function ClientsModule({ session }: ClientsModuleProps) {
       const clientsPayload = clientsResponse.ok ? await clientsResponse.json() : { clients: [] };
       const storesPayload = storesResponse.ok ? await storesResponse.json() : { stores: [] };
 
+      // Resolve current store + populate admin stores dropdown from the /stores list
+      // NOTE: currentStore can be resolved later once DB user/store linking is available.
+
+      // IMPORTANT: don't rely on React state `currentUserRole` here because it may still be the default
+      // value due to async setState. Use the fetched `currentUser` role (or auth metadata) instead.
+      const resolvedRole = String(currentUser?.role || session?.user?.user_metadata?.role || '').toLowerCase();
+
+      if (resolvedRole === 'admin') {
+        const sortedStores = (storesPayload.stores || [])
+          .slice()
+          .sort((a: any, b: any) => String(a?.name || '').localeCompare(String(b?.name || '')));
+        setAllStores(sortedStores);
+      }
+
       const realClients = (clientsPayload.clients || []).map((c: any) => ({
         ...c,
         __entityType: 'client',
@@ -319,7 +337,8 @@ export function ClientsModule({ session }: ClientsModuleProps) {
 
       // Only admins should see magasins (stores) inside the Clients table.
       // For manager/user accounts, the Clients page must show ONLY real clients.
-      const magasinsAsClients = (currentUserRole === 'admin' || session?.user?.user_metadata?.role === 'admin')
+      // IMPORTANT: use resolvedRole (not currentUserRole state) to prevent intermittent empty dropdown/table.
+      const magasinsAsClients = (resolvedRole === 'admin')
         ? (storesPayload.stores || []).map((s: any) => ({
             ...s,
             // normalize fields for table
