@@ -174,7 +174,10 @@ export default function StockReferenceHistoryModule({ session }: { session: any 
   const canViewStockRefHistory = hasPermission('Voir Historique Références Stock');
   const canExportStockRefHistory = hasPermission('Exporter Historique Références Stock (CSV)');
   const canViewStockRefDetails = hasPermission('Voir Détails Référence Stock');
-  const canEditStockRefHistory = hasPermission('Modifier Historique Références Stock');
+
+  // Only admin can modify stock reference history details.
+  // Manager/user must not see the "Modifier" button.
+  const canEditStockRefHistory = String(currentUserRole || '').toLowerCase() === 'admin';
 
   // Fetch current user role + permissions
   useEffect(() => {

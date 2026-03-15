@@ -315,7 +315,9 @@ export function SalesModule({ session }: SalesModuleProps) {
   // Only admins can edit.
   const canEditSale = isAdmin;
 
-  const canCancelOrDeleteSale = hasPermission('Annuler une Vente') || hasPermission('Supprimer une Vente') || canEditSale;
+  // Only admins can cancel/delete sales.
+  // Manager/user must not see the delete button.
+  const canCancelOrDeleteSale = isAdmin;
   const canPrintSale = hasPermission('Imprimer une Vente') || canViewSales;
 
   useEffect(() => {

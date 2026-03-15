@@ -4283,6 +4283,51 @@ async function handler(req: Request): Promise<Response> {
 
   if (path.startsWith("/product-templates/") && method === "PUT") {
     try {
+      // IMPORTANT:
+      // Editing a product template must NEVER create products rows.
+      // This endpoint only updates `product_templates`.
+
+      const templateUpdateBody = await req.json().catch(() => ({}));
+      const templateIdFromPath = String(path.split("/")[2] || '').trim();
+
+      // Hard guard: refuse accidental product creation attempts from client payload.
+      if (templateUpdateBody?.product_id || templateUpdateBody?.create_product || templateUpdateBody?.createProduct) {
+        return jsonResponse({
+          error: 'Invalid payload for product template update (product creation is not allowed here)',
+        }, 400);
+      }
+
+      // Also prevent any attempt to update the PK or insert by passing a different id.
+      if (templateUpdateBody?.id && String(templateUpdateBody.id) !== templateIdFromPath) {
+        return jsonResponse({ error: 'Template id mismatch' }, 400);
+      }
+
+      // Rebuild a strict update payload (update only known columns)
+      const updatePayload: any = {
+        updated_at: new Date().toISOString(),
+      };
+
+      if (templateUpdateBody?.name !== undefined) updatePayload.name = templateUpdateBody.name;
+      if (templateUpdateBody?.category !== undefined) updatePayload.category = templateUpdateBody.category;
+      if (templateUpdateBody?.photo_url !== undefined) updatePayload.photo_url = templateUpdateBody.photo_url || null;
+      if (templateUpdateBody?.description !== undefined) updatePayload.description = templateUpdateBody.description || null;
+      if (templateUpdateBody?.reference !== undefined) updatePayload.reference = templateUpdateBody.reference || null;
+      if (templateUpdateBody?.date_fin !== undefined) updatePayload.date_fin = templateUpdateBody.date_fin || null;
+      if (templateUpdateBody?.fourchette_min !== undefined) updatePayload.fourchette_min = templateUpdateBody.fourchette_min === '' ? null : templateUpdateBody.fourchette_min;
+      if (templateUpdateBody?.fourchette_max !== undefined) updatePayload.fourchette_max = templateUpdateBody.fourchette_max === '' ? null : templateUpdateBody.fourchette_max;
+
+      // Execute UPDATE only (no upsert/insert)
+      const { data: templateRow, error: templateUpdateErr } = await supabase
+        .from('product_templates')
+        .update(updatePayload)
+        .eq('id', templateIdFromPath)
+        .select('*')
+        .maybeSingle();
+
+      if (templateUpdateErr) throw templateUpdateErr;
+      if (!templateRow) return jsonResponse({ error: 'Template not found' }, 404);
+
+      return jsonResponse({ success: true, template: templateRow });
       const templateId = path.split("/")[2];
       const body = await req.json();
       const { data, error } = await supabase
