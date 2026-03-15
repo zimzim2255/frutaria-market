@@ -1154,6 +1154,12 @@ export function ProductsModule({ session }: ProductsModuleProps) {
   };
 
   const handleDelete = async (id: string) => {
+    // UI hard guard (backend/RLS must also enforce). Only admin can delete.
+    if (!canDeleteProduct) {
+      toast.error("Accès refusé: seuls les administrateurs peuvent supprimer un produit");
+      return;
+    }
+
     if (!confirm('Êtes-vous sûr de vouloir supprimer ce produit?')) return;
 
     try {
@@ -1828,11 +1834,11 @@ export function ProductsModule({ session }: ProductsModuleProps) {
   const roleLower = String(effectiveUserRole || 'user').toLowerCase();
   const isAdmin = roleLower === 'admin';
 
-  // Only block MODIFICATION (edit) for non-admin accounts.
-  // Creation/deletion behaviour stays as-is elsewhere.
+  // Restrict edit/delete for manager/user.
+  // Only admin can modify or delete products.
   const canAddProduct = true;
   const canEditProduct = isAdmin;
-  const canDeleteProduct = true;
+  const canDeleteProduct = isAdmin;
 
   // Product template creation should be admin-only
   const canCreateProductTemplate = isAdmin;

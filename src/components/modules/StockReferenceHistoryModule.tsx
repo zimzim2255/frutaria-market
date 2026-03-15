@@ -452,6 +452,8 @@ export default function StockReferenceHistoryModule({ session }: { session: any 
   }, [searchTerm, startDate, endDate, filterSupplier, filterCategory, filterStore, additions, sortByValue]);
 
   // Preload stock reference supplier names so the groups table matches the details page.
+  // NOTE: Browser console may show NS_BINDING_ABORTED for some requests.
+  // This is expected when we abort in-flight requests during rapid re-renders/navigation.
   useEffect(() => {
     if (!session?.access_token) return;
     if (!canViewStockRefHistory) return;
@@ -472,8 +474,8 @@ export default function StockReferenceHistoryModule({ session }: { session: any 
 
     (async () => {
       try {
-        // Limit concurrency to avoid spamming the edge function
-        const concurrency = 6;
+        // Be gentle: reduce concurrency + add small spacing to avoid a burst of preflight+GET.
+        const concurrency = 2;
         for (let i = 0; i < missing.length; i += concurrency) {
           const chunk = missing.slice(i, i + concurrency);
           const results = await Promise.all(
@@ -503,6 +505,9 @@ export default function StockReferenceHistoryModule({ session }: { session: any 
             }
             return next;
           });
+
+          // tiny delay between batches
+          await new Promise((res) => setTimeout(res, 100));
         }
       } catch (e: any) {
         if (e?.name === 'AbortError') return;
@@ -641,7 +646,27 @@ export default function StockReferenceHistoryModule({ session }: { session: any 
 
   // If showing stock reference details, render full-page view
   if (showStockRefDetails && selectedStockRef) {
-    const productsInRef = filteredAdditions.filter(a => a.stock_reference === selectedStockRef);
+    const productsInRefRaw = filteredAdditions.filter(a => a.stock_reference === selectedStockRef);
+
+    // The details page must show ONE row per real product (products.id).
+    // `product_additions_history` can have multiple rows per product (restocks), which looks like duplicates.
+    // We keep the most recent history row per product_id for display/edit.
+    const productsInRef = (() => {
+      const byProductId = new Map<string, any>();
+      for (const row of productsInRefRaw) {
+        const pid = String((row as any)?.product_id || '').trim();
+        if (!pid) continue;
+        const prev = byProductId.get(pid);
+        if (!prev) {
+          byProductId.set(pid, row);
+          continue;
+        }
+        const tPrev = prev?.created_at ? new Date(String(prev.created_at)).getTime() : 0;
+        const tNext = row?.created_at ? new Date(String(row.created_at)).getTime() : 0;
+        if (tNext >= tPrev) byProductId.set(pid, row);
+      }
+      return Array.from(byProductId.values());
+    })();
 
     const sortedProductsInRef = (() => {
       const list = productsInRef.slice();
@@ -797,8 +822,16 @@ export default function StockReferenceHistoryModule({ session }: { session: any 
                             return;
                           }
 
+                          const resolvedProductRow: any = productsInRef.find((p: any) => String(p.id) === String(productId));
+                          const resolvedProductsId = String(resolvedProductRow?.product_id || '').trim();
+                          if (!resolvedProductsId) {
+                            console.error('[stock-reference-history] Missing resolvedProductsId for history row:', { productId, resolvedProductRow });
+                            toast.error("Erreur: produit introuvable (product_id manquant)");
+                            return;
+                          }
+
                           const r = await fetch(
-                            `https://${projectId}.supabase.co/functions/v1/super-handler/products/${productId}`,
+                            `https://${projectId}.supabase.co/functions/v1/super-handler/products/${encodeURIComponent(resolvedProductsId)}`,
                             {
                               method: 'PUT',
                               headers: {
@@ -806,12 +839,38 @@ export default function StockReferenceHistoryModule({ session }: { session: any 
                                 'Authorization': `Bearer ${session?.access_token}`,
                               },
                               body: JSON.stringify({
+                                // Some deployments require store_id for PUT /products/:id.
+                                // Use the store selected in the filter dropdown when provided.
+                                // Fallback to current user's store_id from auth metadata.
+                                // Last-resort fallback: use store_id from the history row.
+                                store_id: filterStore !== 'all'
+                                  ? String(filterStore)
+                                  : (
+                                    (session?.user?.user_metadata?.store_id ? String(session.user.user_metadata.store_id) : null) ||
+                                    String(resolvedProductRow?.store_id || '').trim() ||
+                                    null
+                                  ),
                                 purchase_price: pp,
                                 number_of_boxes: boxes,
                                 supplier_id: draft.supplier_id || null,
                               }),
                             }
                           );
+
+                          // If backend says Product not found, it usually means:
+                          // - the history row points to a deleted/missing products.id
+                          // - or the user is scoped to a different store
+                          // In that case, stop early with a clearer message.
+                          if (!r.ok) {
+                            const t = await r.text().catch(() => '');
+                            console.error('Failed to update product:', t);
+                            if (t.includes('Product not found')) {
+                              toast.error("Produit introuvable (il a peut-être été supprimé ou vous n'avez pas accès à ce magasin)");
+                            } else {
+                              toast.error("Erreur lors de l'enregistrement");
+                            }
+                            return;
+                          }
 
                           if (!r.ok) {
                             const t = await r.text().catch(() => '');
@@ -1375,8 +1434,16 @@ export default function StockReferenceHistoryModule({ session }: { session: any 
                       return;
                     }
 
+                    const resolvedProductRow: any = productsInRef.find((p: any) => String(p.id) === String(productId));
+                    const resolvedProductsId = String(resolvedProductRow?.product_id || '').trim();
+                    if (!resolvedProductsId) {
+                      console.error('[stock-reference-history] Missing resolvedProductsId for history row:', { productId, resolvedProductRow });
+                      toast.error("Erreur: produit introuvable (product_id manquant)");
+                      return;
+                    }
+
                     const r = await fetch(
-                      `https://${projectId}.supabase.co/functions/v1/super-handler/products/${productId}`,
+                      `https://${projectId}.supabase.co/functions/v1/super-handler/products/${encodeURIComponent(resolvedProductsId)}`,
                       {
                         method: 'PUT',
                         headers: {
@@ -1384,12 +1451,34 @@ export default function StockReferenceHistoryModule({ session }: { session: any 
                           'Authorization': `Bearer ${session?.access_token}`,
                         },
                         body: JSON.stringify({
+                          // Some deployments require store_id for PUT /products/:id.
+                          // Use the store selected in the filter dropdown when provided.
+                          // Fallback to current user's store_id from auth metadata.
+                          // Last-resort fallback: use store_id from the history row.
+                          store_id: filterStore !== 'all'
+                            ? String(filterStore)
+                            : (
+                              (session?.user?.user_metadata?.store_id ? String(session.user.user_metadata.store_id) : null) ||
+                              String(resolvedProductRow?.store_id || '').trim() ||
+                              null
+                            ),
                           purchase_price: pp,
                           number_of_boxes: boxes,
                           supplier_id: draft.supplier_id || null,
                         }),
                       }
                     );
+
+                    if (!r.ok) {
+                      const t = await r.text().catch(() => '');
+                      console.error('Failed to update product:', t);
+                      if (t.includes('Product not found')) {
+                        toast.error("Produit introuvable (il a peut-être été supprimé ou vous n'avez pas accès à ce magasin)");
+                      } else {
+                        toast.error("Erreur lors de l'enregistrement");
+                      }
+                      return;
+                    }
 
                     if (!r.ok) {
                       const t = await r.text().catch(() => '');
