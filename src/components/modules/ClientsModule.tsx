@@ -1491,13 +1491,15 @@ export function ClientsModule({ session }: ClientsModuleProps) {
       // IMPORTANT: create the GP row first, so we can link the remise to this payment.
       let createdGlobalPaymentId: string | null = null;
       try {
+        // IMPORTANT: determine admin status using DB-driven role state (currentUserRole),
+        // not auth metadata (which can be missing/stale).
         const paidByStoreId =
-          (session?.user?.user_metadata?.role === 'admin'
+          (currentUserRole === 'admin'
             ? (adminSelectedStoreId || null)
             : (currentStore?.id || null));
 
         const paidByStoreName =
-          (session?.user?.user_metadata?.role === 'admin'
+          (currentUserRole === 'admin'
             ? (allStores.find(s => s.id === adminSelectedStoreId)?.name || null)
             : (currentStore?.name || null));
 

@@ -126,15 +126,42 @@ export function PurchaseModule({ session }: PurchaseModuleProps) {
   };
 
   useEffect(() => {
-    // Fetch user role
-    try {
-      if (session?.user?.user_metadata?.role) {
-        setUserRole(session.user.user_metadata.role);
+    // Resolve user role from DB (super-handler /users) instead of auth metadata.
+    // Auth metadata can be stale/missing and causes admin-only UI (magasin selector) to disappear.
+    (async () => {
+      try {
+        const res = await fetch(
+          `https://${projectId}.supabase.co/functions/v1/super-handler/users`,
+          {
+            headers: {
+              'Authorization': `Bearer ${session.access_token}`,
+            },
+          }
+        );
+
+        if (res.ok) {
+          const data = await res.json().catch(() => null);
+          const me = (data?.users || []).find((u: any) => String(u?.id || '') === String(session?.user?.id || ''))
+            || (data?.users || []).find((u: any) => String(u?.email || '') === String(session?.user?.email || ''))
+            || null;
+
+          const role = String(me?.role || '').toLowerCase();
+          if (role) {
+            setUserRole(role);
+            return;
+          }
+        }
+
+        // Fallback to auth metadata if DB lookup fails
+        const metaRole = String(session?.user?.user_metadata?.role || '').toLowerCase();
+        if (metaRole) setUserRole(metaRole);
+      } catch (error) {
+        console.error('Error fetching user role:', error);
+        const metaRole = String(session?.user?.user_metadata?.role || '').toLowerCase();
+        if (metaRole) setUserRole(metaRole);
       }
-    } catch (error) {
-      console.error('Error fetching user role:', error);
-    }
-  }, [session]);
+    })();
+  }, [session?.access_token, session?.user?.id, session?.user?.email]);
 
   useEffect(() => {
     fetchSales();
