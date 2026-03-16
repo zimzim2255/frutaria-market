@@ -12,6 +12,7 @@ type CheckSortKey =
   | 'amount_used'
   | 'amount_available'
   | 'given_to'
+  | 'notes'
   | 'given_to_type'
   | 'status'
   | 'created_at';
@@ -900,6 +901,8 @@ export function CheckInventoryModule({ session }: { session: any }) {
           return getCheckUsedAvailable(c).remaining;
         case 'given_to':
           return getSortableString(c?.given_to);
+        case 'notes':
+          return getSortableString(c?.notes);
         case 'given_to_type':
           return getSortableString(c?.given_to_type);
         case 'status':
@@ -973,6 +976,27 @@ export function CheckInventoryModule({ session }: { session: any }) {
     return label;
   };
 
+  // Hide internal/system markers from Notes (UI + exports)
+  const cleanNotesForDisplay = (raw: any) => {
+    const s = String(raw || '');
+    if (!s.trim()) return '';
+
+    return s
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter(Boolean)
+      .filter((l) => {
+        const ll = l.toLowerCase();
+        if (ll.includes('source fruta')) return false;
+        if (ll.includes('client_global_payment_pending_consume=')) return false;
+        if (ll.includes('store_global_payment_pending_consume=')) return false;
+        if (ll.includes('supplier_global_payment_pending_consume=')) return false;
+        if (ll.includes('pending_consume=')) return false;
+        return true;
+      })
+      .join(' | ');
+  };
+
   const exportToExcel = () => {
     try {
       const datePart = new Date().toISOString().split('T')[0];
@@ -1019,6 +1043,7 @@ export function CheckInventoryModule({ session }: { session: any }) {
                   <th>Montant</th>
                   <th>Utilisé</th>
                   <th>Disponible</th>
+                  <th>Notes</th>
                   <th>Statut</th>
                   <th>Date Chèque</th>
                   <th>Date Échéance</th>
@@ -1043,6 +1068,7 @@ export function CheckInventoryModule({ session }: { session: any }) {
                       <td>${money(original)}</td>
                       <td>${money(used)}</td>
                       <td>${money(remaining)}</td>
+                      <td>${safe(cleanNotesForDisplay((c as any).notes) || '-')}</td>
                       <td>${safe(getStatusLabel(c.status))}</td>
                       <td>${safe(checkDate)}</td>
                       <td>${safe(dueDate)}</td>
@@ -1102,6 +1128,7 @@ export function CheckInventoryModule({ session }: { session: any }) {
           `${(Number(original) || 0).toFixed(2)} MAD`,
           `${(Number(used) || 0).toFixed(2)} MAD`,
           `${(Number(remaining) || 0).toFixed(2)} MAD`,
+          cleanNotesForDisplay((c as any).notes) || '-',
           getStatusLabel(c.status),
           checkDate,
           dueDate,
@@ -1117,6 +1144,7 @@ export function CheckInventoryModule({ session }: { session: any }) {
           'Montant',
           'Utilisé',
           'Disponible',
+          'Notes',
           'Statut',
           'Date Chèque',
           'Date Échéance',
@@ -2466,34 +2494,44 @@ export function CheckInventoryModule({ session }: { session: any }) {
                         </button>
                       </TableHead>
                       <TableHead>
-                        <button
-                          type="button"
-                          onClick={() => toggleSort('given_to')}
-                          className="inline-flex items-center gap-2 font-semibold hover:underline"
-                          title="Trier"
-                        >
-                          Donné par <span className="text-xs opacity-70">{getSortIndicator('given_to')}</span>
-                        </button>
+                      <button
+                      type="button"
+                      onClick={() => toggleSort('given_to')}
+                      className="inline-flex items-center gap-2 font-semibold hover:underline"
+                      title="Trier"
+                      >
+                      Donné par <span className="text-xs opacity-70">{getSortIndicator('given_to')}</span>
+                      </button>
                       </TableHead>
                       <TableHead>
-                        <button
-                          type="button"
-                          onClick={() => toggleSort('given_to_type')}
-                          className="inline-flex items-center gap-2 font-semibold hover:underline"
-                          title="Trier"
-                        >
-                          Type <span className="text-xs opacity-70">{getSortIndicator('given_to_type')}</span>
-                        </button>
+                      <button
+                      type="button"
+                      onClick={() => toggleSort('notes')}
+                      className="inline-flex items-center gap-2 font-semibold hover:underline"
+                      title="Trier"
+                      >
+                      Notes <span className="text-xs opacity-70">{getSortIndicator('notes')}</span>
+                      </button>
                       </TableHead>
                       <TableHead>
-                        <button
-                          type="button"
-                          onClick={() => toggleSort('status')}
-                          className="inline-flex items-center gap-2 font-semibold hover:underline"
-                          title="Trier"
-                        >
-                          Statut <span className="text-xs opacity-70">{getSortIndicator('status')}</span>
-                        </button>
+                      <button
+                      type="button"
+                      onClick={() => toggleSort('given_to_type')}
+                      className="inline-flex items-center gap-2 font-semibold hover:underline"
+                      title="Trier"
+                      >
+                      Type <span className="text-xs opacity-70">{getSortIndicator('given_to_type')}</span>
+                      </button>
+                      </TableHead>
+                      <TableHead>
+                      <button
+                      type="button"
+                      onClick={() => toggleSort('status')}
+                      className="inline-flex items-center gap-2 font-semibold hover:underline"
+                      title="Trier"
+                      >
+                      Statut <span className="text-xs opacity-70">{getSortIndicator('status')}</span>
+                      </button>
                       </TableHead>
                       <TableHead className="text-right">Actions</TableHead>
                     </TableRow>
@@ -2501,8 +2539,8 @@ export function CheckInventoryModule({ session }: { session: any }) {
                   <TableBody>
                     {filteredChecks.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={12} className="text-center text-gray-500 py-8">
-                          Aucun chèque trouvé
+                        <TableCell colSpan={13} className="text-center text-gray-500 py-8">
+                        Aucun chèque trouvé
                         </TableCell>
                       </TableRow>
                     ) : (
@@ -2597,6 +2635,47 @@ export function CheckInventoryModule({ session }: { session: any }) {
                               })()} MAD
                             </TableCell>
                             <TableCell className="text-gray-700">{check.given_to}</TableCell>
+                            <TableCell
+                            className="text-gray-700 max-w-[260px] truncate"
+                            title={(() => {
+                            const raw = String((check as any).notes || '');
+                            const cleaned = raw
+                            .split(/\r?\n/)
+                            .map((l) => l.trim())
+                            .filter(Boolean)
+                            .filter((l) => {
+                            const ll = l.toLowerCase();
+                            if (ll.includes('source fruta')) return false;
+                            if (ll.includes('client_global_payment_pending_consume=')) return false;
+                            if (ll.includes('store_global_payment_pending_consume=')) return false;
+                            if (ll.includes('supplier_global_payment_pending_consume=')) return false;
+                            if (ll.includes('pending_consume=')) return false;
+                            return true;
+                            })
+                            .join('\n');
+                            return cleaned;
+                            })()}
+                            >
+                            {(() => {
+                            const raw = String((check as any).notes || '');
+                            const cleaned = raw
+                            .split(/\r?\n/)
+                            .map((l) => l.trim())
+                            .filter(Boolean)
+                            .filter((l) => {
+                            const ll = l.toLowerCase();
+                            if (ll.includes('source fruta')) return false;
+                            if (ll.includes('client_global_payment_pending_consume=')) return false;
+                            if (ll.includes('store_global_payment_pending_consume=')) return false;
+                            if (ll.includes('supplier_global_payment_pending_consume=')) return false;
+                            if (ll.includes('pending_consume=')) return false;
+                            return true;
+                            })
+                            .join(' | ');
+                            
+                            return cleaned || '-';
+                            })()}
+                            </TableCell>
                             <TableCell className="text-gray-700 capitalize">{check.given_to_type}</TableCell>
                             <TableCell>
                               <div className={`flex items-center gap-2 px-3 py-1 rounded-full border ${getStatusColor(check.status)} w-fit`}>

@@ -1910,7 +1910,12 @@ export function ClientsModule({ session }: ClientsModuleProps) {
                                 >
                                   <div className="font-semibold text-sm">{client.name}</div>
                                   <div className="text-xs text-gray-600">
-                                    Solde Restant: {financials.totalRemaining.toFixed(2)} MAD
+                                    Solde Restant: {(() => {
+                                      const f = clientFinancials[client.id] || { totalInvoiced: 0, totalPaid: 0 };
+                                      const disc = Number(clientDiscounts[client.id] || 0) || 0;
+                                      const adjusted = (Number(f.totalInvoiced) || 0) - (Number(f.totalPaid) || 0) - disc;
+                                      return adjusted.toFixed(2);
+                                    })()} MAD
                                   </div>
                                 </button>
                               );
@@ -1929,7 +1934,12 @@ export function ClientsModule({ session }: ClientsModuleProps) {
                         <div className="flex justify-between items-center">
                           <span className="text-sm font-semibold text-gray-700">Solde Restant:</span>
                           <span className="text-sm font-bold text-red-600">
-                            {(clientFinancials[globalPaymentSelectedClient.id]?.totalRemaining || 0).toFixed(2)} MAD
+                          {(() => {
+                          const f = clientFinancials[globalPaymentSelectedClient.id] || { totalInvoiced: 0, totalPaid: 0 };
+                          const disc = Number(clientDiscounts[globalPaymentSelectedClient.id] || 0) || 0;
+                          const adjusted = (Number(f.totalInvoiced) || 0) - (Number(f.totalPaid) || 0) - disc;
+                          return adjusted.toFixed(2);
+                          })()} MAD
                           </span>
                         </div>
                         <button
@@ -2416,7 +2426,12 @@ export function ClientsModule({ session }: ClientsModuleProps) {
                         {globalPaymentSelectedClient && (
                           <div className="flex justify-between items-center text-xs text-gray-600">
                             <span>Solde Restant:</span>
-                            <span>{(clientFinancials[globalPaymentSelectedClient.id]?.totalRemaining || 0).toFixed(2)} MAD</span>
+                            <span>{(() => {
+                              const f = clientFinancials[globalPaymentSelectedClient.id] || { totalInvoiced: 0, totalPaid: 0 };
+                              const disc = Number(clientDiscounts[globalPaymentSelectedClient.id] || 0) || 0;
+                              const adjusted = (Number(f.totalInvoiced) || 0) - (Number(f.totalPaid) || 0) - disc;
+                              return adjusted.toFixed(2);
+                            })()} MAD</span>
                           </div>
                         )}
                       </div>

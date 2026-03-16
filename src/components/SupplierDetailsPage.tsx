@@ -1314,21 +1314,8 @@ export function SupplierDetailsPage({ supplier, session, onBack }: SupplierDetai
     }
 
     // Chèques utilisés
-    (filteredSupplierChecksUsed || []).forEach((c: any) => {
-      const rawDate = c.check_date || c.created_at || null;
-      rows.push({
-        _type: 'Chèque',
-        _sort: sortTime(rawDate),
-        _dateStr: fmtDateTime(rawDate),
-        _amount: Number(c.amount || 0) || 0,
-        _method: 'CHECK',
-        _reference: c.check_number || '-',
-        _coffer: c.coffer_id || '-',
-        _actor: c.giver_name || '-',
-        _notes: `Statut: ${c.status || '-'} | Source: ${c.source || '-'}`,
-        _remise: 0,
-      });
-    });
+    // Do not include this table/section in supplier report exports.
+    // (User request: hide "Chèques utilisés" from both PDF and Excel exports.)
 
     // Fournisseur Exceptionnel (passages)
     // Do not include Passages in exported documents.

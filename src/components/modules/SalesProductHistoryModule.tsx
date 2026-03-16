@@ -42,6 +42,7 @@ interface SoldProductRow {
 interface Stats {
   totalRows: number;
   totalQuantity: number;
+  totalCaisse: number;
   totalValue: number;
   uniqueProducts: number;
 }
@@ -387,6 +388,7 @@ export default function SalesProductHistoryModule({ session }: { session: any })
   const stats: Stats = useMemo(() => {
     const totalRows = filtered.length;
     const totalQuantity = filtered.reduce((sum, r) => sum + (Number(r.quantity) || 0), 0);
+    const totalCaisse = filtered.reduce((sum, r) => sum + (Number(r.caisse) || 0), 0);
     const totalValue = filtered.reduce((sum, r) => sum + (Number(r.total_price) || 0), 0);
     // Prefer reference as the stable identifier (works even when product_id is missing).
     // Fallback to product_id then product_name.
@@ -395,7 +397,7 @@ export default function SalesProductHistoryModule({ session }: { session: any })
         .map((r) => String(r.reference || r.product_id || r.product_name || '').trim().toLowerCase())
         .filter(Boolean)
     ).size;
-    return { totalRows, totalQuantity, totalValue, uniqueProducts };
+    return { totalRows, totalQuantity, totalCaisse, totalValue, uniqueProducts };
   }, [filtered]);
 
   const getExportColumns = (): TableColumn<SoldProductRow>[] => [
@@ -443,7 +445,8 @@ export default function SalesProductHistoryModule({ session }: { session: any })
       filename: `Rapport_Historique_Ventes_${datePart}.pdf`,
       headerStats: [
         { label: 'LIGNES', value: String(stats.totalRows) },
-        { label: 'QUANTITÉ', value: String(stats.totalQuantity.toFixed(2)) },
+        { label: 'QUANTITÉ TOTAL', value: String(stats.totalQuantity.toFixed(2)) },
+        { label: 'TOTAL CAISSE', value: String(stats.totalCaisse.toFixed(2)) },
         { label: 'VALEUR', value: `${stats.totalValue.toFixed(2)} MAD` },
         { label: 'PRODUITS UNIQUES', value: String(stats.uniqueProducts) },
       ],
@@ -480,7 +483,7 @@ export default function SalesProductHistoryModule({ session }: { session: any })
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
         <Card>
           <CardContent className="pt-6">
             <div className="text-center">
@@ -492,8 +495,16 @@ export default function SalesProductHistoryModule({ session }: { session: any })
         <Card>
           <CardContent className="pt-6">
             <div className="text-center">
-              <p className="text-gray-600 text-sm">Quantité Totale</p>
+              <p className="text-gray-600 text-sm">Quantité total</p>
               <p className="text-3xl font-bold text-blue-600">{stats.totalQuantity.toFixed(2)}</p>
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pt-6">
+            <div className="text-center">
+              <p className="text-gray-600 text-sm">Total caisse</p>
+              <p className="text-3xl font-bold text-indigo-600">{stats.totalCaisse.toFixed(2)}</p>
             </div>
           </CardContent>
         </Card>

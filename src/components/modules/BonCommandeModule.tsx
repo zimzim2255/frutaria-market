@@ -662,8 +662,61 @@ export default function BonCommandeModule({ session, onBack, sale, adminSelected
     }
   }, [orderData.items, orderData.remiseAmount, orderData.paymentMethod]);
 
+  const validateBeforeSubmit = (): boolean => {
+    const errors: string[] = [];
+
+    // Client fields
+    // Only client name is required (phone/address/ICE are optional as requested)
+    if (!orderData.client.name?.trim()) errors.push('Nom du Client');
+
+    // Dates (required)
+    if (!orderData.invoiceDate?.trim()) errors.push('Date de Facture');
+    if (!orderData.executionDate?.trim()) errors.push("Date d'Exécution");
+
+    // Items (at least 1)
+    if (!orderData.items || orderData.items.length === 0) {
+      errors.push('Articles du Bon de Commande (au moins 1 article)');
+    } else {
+      orderData.items.forEach((item, idx) => {
+        const prefix = `Article ${idx + 1}`;
+        const caisseNum = parseFloat(String(item.caisse).replace(',', '.'));
+        const qtyNum = Number(item.quantity);
+        const moyenneNum = parseFloat(String(item.moyenne).replace(',', '.'));
+        const unitNum = Number(item.unitPrice);
+        const subNum = Number(item.subtotal);
+
+        if (!item.description?.trim()) errors.push(`${prefix}: Description`);
+        if (!item.caisse?.toString().trim() || !Number.isFinite(caisseNum) || caisseNum <= 0) errors.push(`${prefix}: Caisse`);
+        if (!Number.isFinite(qtyNum) || qtyNum <= 0) errors.push(`${prefix}: Quantité`);
+        if (!item.moyenne?.toString().trim() || !Number.isFinite(moyenneNum) || moyenneNum <= 0) errors.push(`${prefix}: Moyenne`);
+        if (!Number.isFinite(unitNum) || unitNum <= 0) errors.push(`${prefix}: Prix Unitaire`);
+        // Subtotal is computed, but still validate it to avoid empty/0 lines
+        if (!Number.isFinite(subNum) || subNum <= 0) errors.push(`${prefix}: Sous-total`);
+      });
+    }
+
+    // Payment validation: require montant payé for cash & bank transfer (as requested)
+    if (orderData.paymentMethod === 'cash' || orderData.paymentMethod === 'bank_transfer') {
+      const paid = Number(orderData.amountPaid);
+      if (!Number.isFinite(paid) || paid <= 0) {
+        errors.push('Montant Payé');
+      }
+    }
+
+    // Remise is intentionally NOT required.
+
+    if (errors.length > 0) {
+      toast.error(`Champs obligatoires manquants / invalides: ${errors.join(', ')}`);
+      return false;
+    }
+
+    return true;
+  };
+
   const handleGeneratePDF = async (uploadedProofUrl?: string): Promise<void> => {
     try {
+      if (!validateBeforeSubmit()) return;
+
       const totals = calculateTotals();
       
       // Create document first
@@ -1494,7 +1547,7 @@ export default function BonCommandeModule({ session, onBack, sale, adminSelected
                       onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
                         const amountPaid = parseFloat(e.target.value) || 0;
                         let newStatus: 'Payée' | 'Non Payée' = 'Non Payée';
-                        
+
                         if (amountPaid > 0) {
                           if (amountPaid >= totals.total) {
                             newStatus = 'Payée';
@@ -1502,13 +1555,14 @@ export default function BonCommandeModule({ session, onBack, sale, adminSelected
                             newStatus = 'Partiellement payée' as any;
                           }
                         }
-                        
+
                         setOrderData({
                           ...orderData,
                           amountPaid: amountPaid,
                           status: newStatus,
                         });
                       }}
+                      required
                       className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent"
                     />
                     <span className="font-semibold text-gray-700">MAD</span>
@@ -1558,6 +1612,7 @@ export default function BonCommandeModule({ session, onBack, sale, adminSelected
                           status: newStatus,
                         });
                       }}
+                      required
                       className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
                     />
                     <span className="font-semibold text-gray-700">MAD</span>
@@ -1879,9 +1934,11 @@ export default function BonCommandeModule({ session, onBack, sale, adminSelected
               <div className="border-t pt-4 space-y-3">
                 {/* Confirm Button */}
                 <Button 
-                  onClick={async () => {
-                    // Validate all items have valid moyenne within fourchette
-                    const invalidItems: string[] = [];
+                onClick={async () => {
+                if (!validateBeforeSubmit()) return;
+                
+                // Validate all items have valid moyenne within fourchette
+                const invalidItems: string[] = [];
                     
                     orderData.items.forEach((item, index) => {
                     if (item.description && item.moyenne) {
@@ -2097,9 +2154,11 @@ export default function BonCommandeModule({ session, onBack, sale, adminSelected
 
                 {/* Generate PDF Button */}
                 <Button 
-                  onClick={() => {
-                    // Validate all items have valid moyenne within fourchette
-                    const invalidItems: string[] = [];
+                onClick={() => {
+                if (!validateBeforeSubmit()) return;
+                
+                // Validate all items have valid moyenne within fourchette
+                const invalidItems: string[] = [];
                     
                     orderData.items.forEach((item, index) => {
                       if (item.description && item.moyenne) {

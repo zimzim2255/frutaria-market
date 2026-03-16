@@ -1633,8 +1633,10 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
     // Date du chèque
     const rawCheckDate: any = (cs as any)?.check_date || (cs as any)?.created_at;
     const parsedCheckDate = rawCheckDate ? new Date(rawCheckDate) : null;
-    const checkDateFrom = filterCheckDateFrom ? new Date(filterCheckDateFrom) : null;
-    const checkDateTo = filterCheckDateTo ? new Date(filterCheckDateTo) : null;
+
+    // Date inputs are YYYY-MM-DD; compare using day boundaries in local time.
+    const checkDateFrom = filterCheckDateFrom ? new Date(`${filterCheckDateFrom}T00:00:00`) : null;
+    const checkDateTo = filterCheckDateTo ? new Date(`${filterCheckDateTo}T23:59:59.999`) : null;
     const matchesCheckDateRange =
       (!checkDateFrom || (parsedCheckDate && parsedCheckDate >= checkDateFrom)) &&
       (!checkDateTo || (parsedCheckDate && parsedCheckDate <= checkDateTo));
@@ -1642,8 +1644,8 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
     // Échéance (prefer inventory_due_date enriched from check_inventory)
     const rawDue: any = (cs as any)?.inventory_due_date || (cs as any)?.due_date || (cs as any)?.execution_date;
     const parsedDue = rawDue ? new Date(rawDue) : null;
-    const dueFrom = filterDueDateFrom ? new Date(filterDueDateFrom) : null;
-    const dueTo = filterDueDateTo ? new Date(filterDueDateTo) : null;
+    const dueFrom = filterDueDateFrom ? new Date(`${filterDueDateFrom}T00:00:00`) : null;
+    const dueTo = filterDueDateTo ? new Date(`${filterDueDateTo}T23:59:59.999`) : null;
     const matchesDueDateRange =
       (!dueFrom || (parsedDue && parsedDue >= dueFrom)) &&
       (!dueTo || (parsedDue && parsedDue <= dueTo));
@@ -1651,8 +1653,8 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
     // Confirmed date range
     const rawConfirmed: any = (cs as any)?.confirmed_at;
     const parsedConfirmed = rawConfirmed ? new Date(rawConfirmed) : null;
-    const confirmedFrom = filterConfirmedDateFrom ? new Date(filterConfirmedDateFrom) : null;
-    const confirmedTo = filterConfirmedDateTo ? new Date(filterConfirmedDateTo) : null;
+    const confirmedFrom = filterConfirmedDateFrom ? new Date(`${filterConfirmedDateFrom}T00:00:00`) : null;
+    const confirmedTo = filterConfirmedDateTo ? new Date(`${filterConfirmedDateTo}T23:59:59.999`) : null;
     const matchesConfirmedRange =
       (!confirmedFrom || (parsedConfirmed && parsedConfirmed >= confirmedFrom)) &&
       (!confirmedTo || (parsedConfirmed && parsedConfirmed <= confirmedTo));
@@ -1660,19 +1662,44 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
     // Transferred date range
     const rawTransferred: any = (cs as any)?.payment_transferred_at || (cs as any)?.transferred_at;
     const parsedTransferred = rawTransferred ? new Date(rawTransferred) : null;
-    const transferredFrom = filterTransferredDateFrom ? new Date(filterTransferredDateFrom) : null;
-    const transferredTo = filterTransferredDateTo ? new Date(filterTransferredDateTo) : null;
+    const transferredFrom = filterTransferredDateFrom ? new Date(`${filterTransferredDateFrom}T00:00:00`) : null;
+    const transferredTo = filterTransferredDateTo ? new Date(`${filterTransferredDateTo}T23:59:59.999`) : null;
     const matchesTransferredRange =
       (!transferredFrom || (parsedTransferred && parsedTransferred >= transferredFrom)) &&
       (!transferredTo || (parsedTransferred && parsedTransferred <= transferredTo));
 
     // Amount range
+    // IMPORTANT: HTML number inputs can produce empty strings and users may type comma decimals.
+    // Using Number('') => 0 was causing filters to behave incorrectly.
+    // We parse safely and only apply the bound when the value is a real number.
     const amount = Number((cs as any)?.amount ?? 0) || 0;
-    const amountFrom = filterAmountFrom ? Number(filterAmountFrom) : null;
-    const amountTo = filterAmountTo ? Number(filterAmountTo) : null;
+
+    const parseAmountFilter = (raw: string) => {
+      // Accept both "1234.56" and "1 234,56" and ignore currency symbols.
+      const s0 = String(raw ?? '').trim();
+      if (!s0) return null;
+
+      // Keep digits, dot, comma, minus only
+      let s = s0.replace(/[^0-9,\.\-]/g, '');
+      if (!s) return null;
+
+      // Support comma decimals
+      s = s.replace(/,/g, '.');
+
+      const n = Number(s);
+      return Number.isFinite(n) ? n : null;
+    };
+
+    const amountFrom = parseAmountFilter(filterAmountFrom);
+    const amountTo = parseAmountFilter(filterAmountTo);
+
+    // If user swaps min/max, still behave correctly.
+    const minAmount = amountFrom !== null && amountTo !== null ? Math.min(amountFrom, amountTo) : amountFrom;
+    const maxAmount = amountFrom !== null && amountTo !== null ? Math.max(amountFrom, amountTo) : amountTo;
+
     const matchesAmountRange =
-      (amountFrom === null || amount >= amountFrom) &&
-      (amountTo === null || amount <= amountTo);
+      (minAmount === null || amount >= minAmount) &&
+      (maxAmount === null || amount <= maxAmount);
 
     return (
       matchesSearch &&
@@ -3712,7 +3739,14 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
                 const supplierPaymentsList = supplierPayments.filter(p => p.supplier_id === selectedPaymentSupplier.id);
                 const currentTotalPaid = supplierPaymentsList.reduce((sum, p) => sum + (p.amount || 0), 0);
                 const totalInvoiced = selectedPaymentSupplier.balance || 0;
-                const remainingBalance = totalInvoiced - currentTotalPaid;
+                const supplierDiscount = (discounts || [])
+                  .filter((d: any) =>
+                    String(d?.status || '').toLowerCase() === 'active' &&
+                    String(d?.entity_type || '').toLowerCase() === 'supplier' &&
+                    String(d?.entity_id || '') === String(selectedPaymentSupplier.id)
+                  )
+                  .reduce((s: number, d: any) => s + (Number(d?.discount_amount || 0) || 0), 0);
+                const remainingBalance = totalInvoiced - currentTotalPaid - supplierDiscount;
                 const totalToApply = amount + remiseAmount;
 
                 if (totalToApply > remainingBalance) {
@@ -3916,7 +3950,14 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
                   const supplierPaymentsList = supplierPayments.filter(p => p.supplier_id === supplier.id);
                   const currentTotalPaid = supplierPaymentsList.reduce((sum, p) => sum + (p.amount || 0), 0);
                   const totalInvoiced = supplier.balance || 0;
-                  const remainingBalance = totalInvoiced - currentTotalPaid;
+                  const supplierDiscount = (discounts || [])
+                    .filter((d: any) =>
+                      String(d?.status || '').toLowerCase() === 'active' &&
+                      String(d?.entity_type || '').toLowerCase() === 'supplier' &&
+                      String(d?.entity_id || '') === String(supplier.id)
+                    )
+                    .reduce((s: number, d: any) => s + (Number(d?.discount_amount || 0) || 0), 0);
+                  const remainingBalance = totalInvoiced - currentTotalPaid - supplierDiscount;
                   return (
                   <button
                   key={supplier.id}
@@ -3951,7 +3992,14 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
                       const supplierPaymentsList = supplierPayments.filter(p => p.supplier_id === selectedPaymentSupplier.id);
                       const currentTotalPaid = supplierPaymentsList.reduce((sum, p) => sum + (p.amount || 0), 0);
                       const totalInvoiced = selectedPaymentSupplier.balance || 0;
-                      const remainingBalance = totalInvoiced - currentTotalPaid;
+                      const supplierDiscount = (discounts || [])
+                        .filter((d: any) =>
+                          String(d?.status || '').toLowerCase() === 'active' &&
+                          String(d?.entity_type || '').toLowerCase() === 'supplier' &&
+                          String(d?.entity_id || '') === String(selectedPaymentSupplier.id)
+                        )
+                        .reduce((s: number, d: any) => s + (Number(d?.discount_amount || 0) || 0), 0);
+                      const remainingBalance = totalInvoiced - currentTotalPaid - supplierDiscount;
                       const paymentAmt = parseFloat(paymentAmount) || 0;
                       const remiseAmt = parseFloat(paymentRemiseAmount) || 0;
                       const totalToApply = paymentAmt + remiseAmt;
@@ -4068,7 +4116,14 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
                         const supplierPaymentsList = supplierPayments.filter(p => p.supplier_id === selectedPaymentSupplier.id);
                         const currentTotalPaid = supplierPaymentsList.reduce((sum, p) => sum + (p.amount || 0), 0);
                         const totalInvoiced = selectedPaymentSupplier.balance || 0;
-                        const remainingBalance = totalInvoiced - currentTotalPaid;
+                        const supplierDiscount = (discounts || [])
+                          .filter((d: any) =>
+                            String(d?.status || '').toLowerCase() === 'active' &&
+                            String(d?.entity_type || '').toLowerCase() === 'supplier' &&
+                            String(d?.entity_id || '') === String(selectedPaymentSupplier.id)
+                          )
+                          .reduce((s: number, d: any) => s + (Number(d?.discount_amount || 0) || 0), 0);
+                        const remainingBalance = totalInvoiced - currentTotalPaid - supplierDiscount;
                         return remainingBalance.toFixed(2);
                       })()} MAD
                     </p>
@@ -4527,7 +4582,14 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
                           const supplierPaymentsList = supplierPayments.filter(p => p.supplier_id === selectedPaymentSupplier.id);
                           const currentTotalPaid = supplierPaymentsList.reduce((sum, p) => sum + (p.amount || 0), 0);
                           const totalInvoiced = selectedPaymentSupplier.balance || 0;
-                          const remainingBalance = totalInvoiced - currentTotalPaid;
+                          const supplierDiscount = (discounts || [])
+                            .filter((d: any) =>
+                              String(d?.status || '').toLowerCase() === 'active' &&
+                              String(d?.entity_type || '').toLowerCase() === 'supplier' &&
+                              String(d?.entity_id || '') === String(selectedPaymentSupplier.id)
+                            )
+                            .reduce((s: number, d: any) => s + (Number(d?.discount_amount || 0) || 0), 0);
+                          const remainingBalance = totalInvoiced - currentTotalPaid - supplierDiscount;
                           return remainingBalance.toFixed(2);
                         })()} MAD</span>
                       </div>
