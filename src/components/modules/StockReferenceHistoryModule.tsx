@@ -71,6 +71,7 @@ const pickGroupSupplierName = (products: ProductAddition[], stockRefSupplierName
 interface ProductAdditionStats {
   totalAdditions: number;
   totalQuantityAdded: number;
+  totalCaisseAdded: number;
   totalValueAdded: number;
   averagePrice: number;
   uniqueProducts: number;
@@ -85,6 +86,7 @@ export default function StockReferenceHistoryModule({ session }: { session: any 
   const [stats, setStats] = useState<ProductAdditionStats>({
     totalAdditions: 0,
     totalQuantityAdded: 0,
+    totalCaisseAdded: 0,
     totalValueAdded: 0,
     averagePrice: 0,
     uniqueProducts: 0,
@@ -317,12 +319,13 @@ export default function StockReferenceHistoryModule({ session }: { session: any 
     const stats: ProductAdditionStats = {
       totalAdditions: additionsList.length,
       totalQuantityAdded: additionsList.reduce((sum, a) => sum + a.quantity_added, 0),
+      totalCaisseAdded: additionsList.reduce((sum, a: any) => sum + (Number((a as any).caisse) || 0), 0),
       totalValueAdded: additionsList.reduce((sum, a) => sum + a.total_value, 0),
       averagePrice: 0,
       uniqueProducts: new Set(additionsList.map(a => a.product_id)).size,
     };
 
-    if (additionsList.length > 0) {
+    if (additionsList.length > 0 && stats.totalQuantityAdded > 0) {
       stats.averagePrice = stats.totalValueAdded / stats.totalQuantityAdded;
     }
 
@@ -449,6 +452,7 @@ export default function StockReferenceHistoryModule({ session }: { session: any 
     }
 
     setFilteredAdditions(filtered);
+    calculateStats(filtered);
   }, [searchTerm, startDate, endDate, filterSupplier, filterCategory, filterStore, additions, sortByValue]);
 
   // Preload stock reference supplier names so the groups table matches the details page.
@@ -1643,7 +1647,7 @@ export default function StockReferenceHistoryModule({ session }: { session: any 
       </div>
 
       {/* Stats Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4">
         <Card>
           <CardContent className="pt-6">
             <div className="text-center">
@@ -1667,6 +1671,15 @@ export default function StockReferenceHistoryModule({ session }: { session: any 
             <div className="text-center">
               <p className="text-gray-600 text-sm">Valeur Totale</p>
               <p className="text-3xl font-bold text-green-600">{stats.totalValueAdded.toFixed(2)} MAD</p>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardContent className="pt-6">
+            <div className="text-center">
+              <p className="text-gray-600 text-sm">Caisse Totale</p>
+              <p className="text-3xl font-bold text-sky-600">{stats.totalCaisseAdded}</p>
             </div>
           </CardContent>
         </Card>
