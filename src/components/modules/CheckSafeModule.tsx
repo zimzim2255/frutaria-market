@@ -284,6 +284,8 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
           return {
             ...check,
             inventory_due_date: inv?.due_date || null,
+            // Bring inventory notes into Coffre UI so we can display them in the table.
+            inventory_notes: inv?.notes || null,
             created_by_user: createdByUser
               ? {
                   id: createdByUser.id,
@@ -1746,6 +1748,27 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
     return Number.isFinite(t) ? t : 0;
   };
 
+  // Hide internal/system markers from Notes (same approach as CheckInventoryModule)
+  const cleanNotesForDisplay = (raw: any) => {
+    const s = String(raw || '');
+    if (!s.trim()) return '';
+
+    return s
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter(Boolean)
+      .filter((l) => {
+        const ll = l.toLowerCase();
+        if (ll.includes('source fruta')) return false;
+        if (ll.includes('client_global_payment_pending_consume=')) return false;
+        if (ll.includes('store_global_payment_pending_consume=')) return false;
+        if (ll.includes('supplier_global_payment_pending_consume=')) return false;
+        if (ll.includes('pending_consume=')) return false;
+        return true;
+      })
+      .join(' | ');
+  };
+
   const sortedChecksSafe = (() => {
     const list = (filteredChecksSafe || []).slice();
     if (!sortChecksConfig) return list;
@@ -1754,6 +1777,13 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
     const factor = direction === 'asc' ? 1 : -1;
 
     const getValue = (cs: any) => {
+      const safeNotes = cleanNotesForDisplay(
+        cs?.inventory_notes ??
+          cs?.notes ??
+          cs?.verification_notes ??
+          cs?.payment_transferred_note
+      );
+
       switch (key) {
         case 'check_number':
           return sortString(resolveChequeNumber(cs));
@@ -1778,6 +1808,8 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
           return sortDate(cs?.confirmed_at);
         case 'transferred_at':
           return sortDate(cs?.payment_transferred_at || cs?.transferred_at);
+        case 'notes':
+          return sortString(safeNotes);
         default:
           return '';
       }
@@ -5186,13 +5218,23 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
                         Transféré le <span className="text-xs opacity-70">{getSortIndicator(sortChecksConfig as any, 'transferred_at')}</span>
                       </button>
                     </TableHead>
+                    <TableHead>
+                      <button
+                        type="button"
+                        onClick={() => toggleChecksSort('notes')}
+                        className="inline-flex items-center gap-2 font-semibold hover:underline"
+                        title="Trier"
+                      >
+                        Notes <span className="text-xs opacity-70">{getSortIndicator(sortChecksConfig as any, 'notes')}</span>
+                      </button>
+                    </TableHead>
                     <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {filteredChecksSafe.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={11} className="text-center text-gray-500 py-8">
+                      <TableCell colSpan={12} className="text-center text-gray-500 py-8">
                         Aucun chèque dans le coffre-fort
                       </TableCell>
                     </TableRow>
@@ -5294,7 +5336,13 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
                           {cs.confirmed_at ? new Date(cs.confirmed_at).toLocaleDateString('fr-FR') : '-'}
                         </TableCell>
                         <TableCell className="text-sm">
-                          {cs.payment_transferred_at ? new Date(cs.payment_transferred_at).toLocaleDateString('fr-FR') : '-'}
+                        {cs.payment_transferred_at ? new Date(cs.payment_transferred_at).toLocaleDateString('fr-FR') : '-'}
+                        </TableCell>
+                        <TableCell
+                        className="text-sm max-w-[260px] truncate"
+                        title={cleanNotesForDisplay(cs?.inventory_notes ?? cs?.notes ?? '')}
+                        >
+                        {cleanNotesForDisplay(cs?.inventory_notes ?? cs?.notes ?? '').trim() || '-'}
                         </TableCell>
                         <TableCell className="text-right">
                           <div className="flex justify-end gap-2">

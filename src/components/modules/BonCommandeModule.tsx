@@ -871,8 +871,10 @@ export default function BonCommandeModule({ session, onBack, sale, adminSelected
           try {
             // Transform items to match backend expectations
             const transformedItems = orderData.items.map(item => ({
+              // Keep `id` as the client-side line id, but ALWAYS include a real product UUID.
               id: item.id,
               product_id: item.product_id,
+              productId: item.product_id,
               name: item.description,
               quantity: item.quantity,
               caisse: item.caisse,
@@ -934,6 +936,16 @@ export default function BonCommandeModule({ session, onBack, sale, adminSelected
 
             console.log('Sale payload:', JSON.stringify(salePayload, null, 2));
             console.log('=== END FRONTEND SALE CREATION ===');
+
+            // Frontend validation: block if any line doesn't have a selected product UUID.
+            const missingProduct = (transformedItems || [])
+              .map((it: any, idx: number) => ({ idx, product_id: String(it?.product_id || '').trim(), name: it?.name }))
+              .filter((x: any) => !x.product_id);
+            if (missingProduct.length > 0) {
+              console.error('[BonCommandeModule] Blocking sale: missing product_id on items', missingProduct);
+              toast.error('Veuillez sélectionner un produit depuis la liste (produit_id manquant).');
+              return;
+            }
 
             const saveResponse = await fetch(
               sale?.id
@@ -1997,8 +2009,10 @@ export default function BonCommandeModule({ session, onBack, sale, adminSelected
                     try {
                       // Transform items to match backend expectations
                       const transformedItems = orderData.items.map(item => ({
+                        // Keep `id` as the client-side line id. product_id must be a real product UUID.
                         id: item.id,
                         product_id: item.product_id,
+                        productId: item.product_id,
                         name: item.description,
                         quantity: item.quantity,
                         unitPrice: item.unitPrice,
@@ -2015,6 +2029,17 @@ export default function BonCommandeModule({ session, onBack, sale, adminSelected
                       console.log('=== FRONTEND SALE CONFIRMATION (NO PDF) ===');
                       console.log('Transformed items:', JSON.stringify(transformedItems, null, 2));
                       console.log('Items count:', transformedItems.length);
+
+                      // Frontend validation: block if any line doesn't have a selected product UUID.
+                      const missingProduct = (transformedItems || [])
+                        .map((it: any, idx: number) => ({ idx, product_id: String(it?.product_id || '').trim(), name: it?.name }))
+                        .filter((x: any) => !x.product_id);
+                      if (missingProduct.length > 0) {
+                        console.error('[BonCommandeModule] Blocking sale confirmation: missing product_id on items', missingProduct);
+                        toast.error('Veuillez sélectionner un produit depuis la liste (produit_id manquant).');
+                        setLoading(false);
+                        return;
+                      }
 
                       // Consume BL only now (on actual save) so opening/canceling does not waste numbers.
                       let finalBlId = blId;

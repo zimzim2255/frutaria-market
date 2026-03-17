@@ -65,6 +65,7 @@ export function SalesModule({ session }: SalesModuleProps) {
     client_if: '',
     client_rc: '',
     client_patente: '',
+    notes: '',
   });
   const [clients, setClients] = useState<any[]>([]);
   const [filteredClients, setFilteredClients] = useState<any[]>([]);
@@ -600,9 +601,18 @@ export function SalesModule({ session }: SalesModuleProps) {
   const resetForm = () => {
     setFormData({
       store_id: '',
+      client_id: '',
       total_amount: '',
       amount_paid: '',
       payment_status: 'unpaid',
+      payment_method: 'cash',
+      client_name: '',
+      client_phone: '',
+      client_address: '',
+      client_ice: '',
+      client_if: '',
+      client_rc: '',
+      client_patente: '',
       notes: '',
     });
     setSaleItems([]);
@@ -825,17 +835,27 @@ export function SalesModule({ session }: SalesModuleProps) {
 
       const matchesSelectedStore = saleStoreId === selectedId || relatedStoreId === selectedId;
 
-      // Debug admin filtering issues
+      // Debug admin filtering issues (log once per selectedId+saleId to avoid console spam)
       if (!matchesSelectedStore) {
-        console.log('[SalesModule] Filter mismatch', {
-          selectedId,
-          saleId: sale?.id,
-          sale_number: sale?.sale_number,
-          saleStoreId,
-          relatedStoreId,
-          rawStoreId: sale?.store_id,
-          rawRelatedStoreId: sale?.stores?.id,
-        });
+        try {
+          const key = `[SalesModule] Filter mismatch|${selectedId}|${String(sale?.id || '')}`;
+          const w: any = (window as any);
+          w.__salesFilterMismatchLogged = w.__salesFilterMismatchLogged || new Set();
+          if (!w.__salesFilterMismatchLogged.has(key)) {
+            w.__salesFilterMismatchLogged.add(key);
+            console.log('[SalesModule] Filter mismatch', {
+              selectedId,
+              saleId: sale?.id,
+              sale_number: sale?.sale_number,
+              saleStoreId,
+              relatedStoreId,
+              rawStoreId: sale?.store_id,
+              rawRelatedStoreId: sale?.stores?.id,
+            });
+          }
+        } catch {
+          // ignore
+        }
       }
 
       return matchesSelectedStore && matchesSearch;

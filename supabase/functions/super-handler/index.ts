@@ -6930,6 +6930,9 @@ if (!existingInv?.id) {
       // Helper: get a numeric quantity to use for stock operations.
       // Some modules (CreatePurchase/Transfer) store the real movement in `caisse`.
       const getMovementQty = (item: any) => {
+        // Prefer normalized move qty when available.
+        // This is set once when /sales POST normalizes `items`.
+        if (item && Number.isFinite((item as any).__moveQty)) return Number((item as any).__moveQty);
         const raw = item?.caisse ?? item?.quantity;
         const n = typeof raw === "string" ? parseFloat(raw) : Number(raw);
         return Number.isFinite(n) ? n : 0;
@@ -7192,20 +7195,42 @@ if (!existingInv?.id) {
           // - For normal sales, the "movement" is the sold quantity.
           // - Never fallback caisse to productData.number_of_boxes (that's current stock, not movement).
           // - If caisse is not provided, fallback to quantity.
+          // Validate product_id is a UUID. If not, block the request (prevents silent stock failures).
+          const productIdStr = productId ? String(productId).trim() : '';
+          const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(productIdStr);
+          if (!isUuid) {
+            console.error('[sales POST] invalid product_id on item (must be UUID):', {
+              received_product_id: productId,
+              received_item_id: item?.id,
+              received_item_product_id: item?.product_id,
+              name: item?.name,
+            });
+            return jsonResponse({
+              error: 'Invalid item: product_id must be a UUID (select product from list).',
+              invalid_item: {
+                id: item?.id,
+                product_id: item?.product_id,
+                name: item?.name,
+              },
+            }, 400);
+          }
+
           const saleItem = {
             sale_id: saleId,
-            product_id: productId || null,
+            product_id: productIdStr,
             name: item.name || productData?.name || 'Produit inconnu',
             reference: item.reference || productData?.reference || null,
             category: item.category || productData?.category || null,
             lot: item.lot || productData?.lot || null,
             // Preserve decimals: caisse can be a decimal value
-            caisse: (parseFloat(String(item.caisse ?? '').replace(',', '.')) || 0) || (parseFloat(String(item.quantity ?? '').replace(',', '.')) || 0) || 0,
+            caisse: (parseFloat(String(item.caisse ?? '').replace(',', '.')) || 0) || 0,
             moyenne: parseFloat(item.moyenne) || parseFloat(item.avg_net_weight_per_box) || parseFloat(productData?.avg_net_weight_per_box) || null,
             fourchette_min: parseFloat(item.fourchette_min) || parseFloat(productData?.fourchette_min) || null,
             fourchette_max: parseFloat(item.fourchette_max) || parseFloat(productData?.fourchette_max) || null,
-            quantity: parseFloat(item.quantity) || 0,
-            unit_price: parseFloat(item.unitPrice) || parseFloat(item.unit_price) || parseFloat(item.sale_price) || parseFloat(productData?.sale_price) || 0,
+            // Keep quantity for reporting but DO NOT use it for stock movement.
+            // Quantity can be decimal (KG). DB column must support numeric/decimal.
+            quantity: parseFloat(String(item.quantity ?? '').replace(',', '.')) || 0,
+            unit_price: parseFloat(item.unitPrice) || parseFloat(item.unit_price) || parseFloat(item.sale_price) || parseFloat(productData?.sale_price) || parseFloat(productData?.unit_price) || 0,
             total_price: parseFloat(item.subtotal) || parseFloat(item.total_price) || 0,
             subtotal: parseFloat(item.subtotal) || parseFloat(item.total_price) || 0,
           };
@@ -7225,7 +7250,12 @@ if (!existingInv?.id) {
           if (itemsError) {
             console.error("Error inserting sale items:", itemsError);
             console.error("Items error details:", JSON.stringify(itemsError, null, 2));
-            console.warn("Sale created but items could not be saved to sale_items table");
+            // HARD FAIL: without sale_items we cannot decrement stock reliably.
+            return jsonResponse({
+              error: 'Sale items insert failed (sale created but cannot proceed).',
+              details: itemsError,
+              hint: 'Check sale_items table schema (required columns / constraints) and ensure product_id is valid UUID.',
+            }, 500);
           } else {
             console.log("Sale items saved successfully to sale_items table");
             console.log("Inserted items:", JSON.stringify(insertedItems, null, 2));
@@ -7351,14 +7381,105 @@ if (!existingInv?.id) {
       // Additionally: when creating a Purchase/Transfer, we must also decrement the source product's `number_of_boxes`
       // ("caisse" in UI) so the Products page reflects the change immediately after confirmation.
       //
-      // ===== ALSO: decrement product "caisse" for normal SALES =====
-      // SalesModule can send a per-line `caisse` value. When a sale is confirmed (created),
-      // we want Products page to reflect the new caisse automatically.
+      // ===== ALSO: decrement store_stocks for normal SALES (BL) =====
+      // A normal sale should decrement store_stocks for the SALE'S store_id.
+      // This must happen in POST /sales (not only on PUT confirmation), because your NO-PDF flow creates
+      // already-paid sales and never calls PUT /sales/:id.
       try {
         // Use the final persisted sale number for all logic.
         // The request body can be missing sale_number or use a different field name.
         const saleNumber = String(data?.[0]?.sale_number || body.sale_number || "");
         const isPurchaseOrTransfer = saleNumber.includes("PURCHASE-") || saleNumber.includes("TRANSFER-");
+
+        // For normal sales, decrement only when the sale is effectively paid/partial.
+        // Accept both `payment_status` and `status` (frontend NO-PDF uses `status`).
+        const effectivePaymentStatus = String((body as any).payment_status || (body as any).status || '').trim().toLowerCase();
+        const shouldDeductForNormalSale = !isPurchaseOrTransfer && (effectivePaymentStatus === 'paid' || effectivePaymentStatus === 'partial');
+
+        if (shouldDeductForNormalSale && saleId) {
+          const saleStoreId = finalStoreId ? String(finalStoreId) : (body.store_id ? String(body.store_id) : null);
+          if (!saleStoreId) {
+            console.warn('[sales POST] cannot deduct stock for normal sale: store_id is missing', { saleId, saleNumber });
+          } else {
+            // Idempotency guard: never deduct stock twice for the same sale.
+            const stockAppliedMarker = 'stock_deducted=1';
+            const saleNotes0 = String((data?.[0] as any)?.notes || body.notes || '');
+
+            if (saleNotes0.includes(stockAppliedMarker)) {
+              console.log('[sales POST] stock already deducted (marker present). Skipping.');
+            } else {
+              const { data: sItems, error: sItemsErr } = await supabase
+                .from('sale_items')
+                .select('product_id, caisse, quantity')
+                .eq('sale_id', saleId)
+                .limit(5000);
+
+              if (sItemsErr) throw sItemsErr;
+
+              // Aggregate per product_id
+              // IMPORTANT BUSINESS RULE:
+              // - For normal BL sales, stock decrement is driven by `caisse` ONLY.
+              // - `quantity` is KG and must NOT decrement store stock.
+              const decByProductId = new Map<string, number>();
+              for (const it of (sItems || [])) {
+                const pid = it?.product_id ? String(it.product_id) : '';
+                if (!pid) continue;
+
+                const rawCaisse = (it as any)?.caisse;
+                const caisse = typeof rawCaisse === 'string' ? Number(String(rawCaisse).replace(',', '.')) : Number(rawCaisse);
+                const dec = Number.isFinite(caisse) ? caisse : 0;
+                if (dec <= 0) continue;
+
+                decByProductId.set(pid, (decByProductId.get(pid) || 0) + dec);
+              }
+
+              for (const [productId, dec] of decByProductId.entries()) {
+                const { data: row, error: rowErr } = await supabase
+                  .from('store_stocks')
+                  .select('id, quantity')
+                  .eq('product_id', productId)
+                  .eq('store_id', saleStoreId)
+                  .maybeSingle();
+
+                if (rowErr && (rowErr as any).code !== 'PGRST116') throw rowErr;
+
+                const currentQty = Number((row as any)?.quantity ?? 0) || 0;
+                const newQty = Math.max(0, currentQty - dec);
+
+                if ((row as any)?.id) {
+                  const { error: updErr } = await supabase
+                    .from('store_stocks')
+                    .update({ quantity: newQty })
+                    .eq('id', (row as any).id);
+                  if (updErr) throw updErr;
+                } else {
+                  const { error: insErr } = await supabase
+                    .from('store_stocks')
+                    .insert([{ product_id: productId, store_id: saleStoreId, quantity: newQty }]);
+                  if (insErr) throw insErr;
+                }
+
+                console.log(`[sales POST] normal sale stock deducted (caisse-only) store=${saleStoreId} product=${productId} -${dec} => ${newQty}`);
+              }
+
+              // Mark as applied (idempotency)
+              try {
+                const nextNotes = saleNotes0.includes(stockAppliedMarker)
+                  ? saleNotes0
+                  : (saleNotes0 ? `${saleNotes0} | ${stockAppliedMarker}` : stockAppliedMarker);
+
+                const { error: markErr } = await supabase
+                  .from('sales')
+                  .update({ notes: nextNotes, updated_at: new Date().toISOString() } as any)
+                  .eq('id', saleId);
+
+                if (markErr) console.warn('[sales POST] failed to mark stock applied:', markErr);
+              } catch (e) {
+                console.warn('[sales POST] failed to mark stock applied (exception):', e);
+              }
+            }
+          }
+        }
 
         const decrementProductBoxes = async (productId: string, dec: number) => {
           if (!productId || dec <= 0) return;
@@ -7383,86 +7504,11 @@ if (!existingInv?.id) {
           if (updErr) throw updErr;
         };
 
-        // For normal sales (not purchase/transfer), decrement stock by *CAISSE* (business rule).
-        // Products page stock is driven by store_stocks.quantity, so we must also decrement store_stocks.
-        // Stock movement:
-        // - Normal sales: decrement the selling store
-        // - Purchases/transfers: decrement SOURCE store (handled below), so this block must not be skipped.
-        // We keep this block active and let the purchase/transfer section decide which store to debit.
-        if (saleId) {
-          const { data: saleItemsRows, error: saleItemsErr } = await supabase
-            .from("sale_items")
-            .select("product_id, caisse, quantity")
-            .eq("sale_id", saleId);
-
-          if (saleItemsErr) throw saleItemsErr;
-
-          // Resolve which store(s) to decrement:
-          // - Prefer sale.store_id (finalStoreId)
-          // - Else fallback to created_for_store_id (body.store_id)
-          // - Else fallback to decrement all store_stocks rows for the product (guaranteed to reflect in Products page)
-          const targetStoreId: string | null = finalStoreId ? String(finalStoreId) : (body.store_id ? String(body.store_id) : null);
-
-          for (const it of saleItemsRows || []) {
-            const productId = String(it?.product_id || "");
-            if (!productId) continue;
-
-            const rawCaisse = (it as any)?.caisse;
-            const rawQty = (it as any)?.quantity;
-            const caisse = typeof rawCaisse === "string" ? parseFloat(rawCaisse) : Number(rawCaisse);
-            const qty = typeof rawQty === "string" ? parseFloat(rawQty) : Number(rawQty);
-            const dec = Number.isFinite(caisse) && caisse > 0 ? caisse : (Number.isFinite(qty) ? qty : 0);
-            if (dec <= 0) continue;
-
-            if (targetStoreId) {
-              const { data: row, error: rowErr } = await supabase
-                .from("store_stocks")
-                .select("id, quantity")
-                .eq("product_id", productId)
-                .eq("store_id", targetStoreId)
-                .maybeSingle();
-
-              if (rowErr && rowErr.code !== 'PGRST116') throw rowErr;
-
-              const currentQty = Number(row?.quantity || 0) || 0;
-              const newQty = Math.max(0, currentQty - dec);
-
-              if (row?.id) {
-                const { error: updErr } = await supabase
-                  .from("store_stocks")
-                  .update({ quantity: newQty })
-                  .eq("id", row.id);
-                if (updErr) throw updErr;
-              } else {
-                const { error: insErr } = await supabase
-                  .from("store_stocks")
-                  .insert([{ product_id: productId, store_id: targetStoreId, quantity: newQty }]);
-                if (insErr) throw insErr;
-              }
-            } else {
-              // Guaranteed fallback: decrement all store stocks rows for the product
-              const { data: rows, error: rowsErr } = await supabase
-                .from("store_stocks")
-                .select("id, quantity")
-                .eq("product_id", productId);
-
-              if (rowsErr) throw rowsErr;
-
-              for (const r of rows || []) {
-                const currentQty = Number(r.quantity || 0) || 0;
-                const newQty = Math.max(0, currentQty - dec);
-                const { error: updErr } = await supabase
-                  .from("store_stocks")
-                  .update({ quantity: newQty })
-                  .eq("id", r.id);
-                if (updErr) throw updErr;
-              }
-            }
-
-            // Keep product-level caisse in sync too
-            await decrementProductBoxes(productId, dec);
-          }
-        }
+        // For normal BL sales, stock is deducted once in the block above (shouldDeductForNormalSale)
+        // with an idempotency marker (stock_deducted=1). Do NOT deduct again here.
+        // This block previously caused double-deduction (e.g. caisse=1 => deduct 2).
+        //
+        // NOTE: We keep PURCHASE/TRANSFER stock handling below.
 
         if (isPurchaseOrTransfer && saleId) {
           // For PURCHASE/TRANSFER, stock must be moved:
@@ -7486,7 +7532,14 @@ if (!existingInv?.id) {
           if (sourceStoreId) {
             for (const it of sItems || []) {
               const moveQty = getMovementQty(it);
-              if (!it.product_id || moveQty <= 0) continue;
+              if (!it.product_id || moveQty <= 0) {
+                console.error('[sales POST] skipping purchase/transfer source decrement (invalid normalized fields):', {
+                  index: (it as any)?.__idx,
+                  product_id: it?.product_id,
+                  moveQty,
+                });
+                continue;
+              }
 
               const { data: stockRow, error: stockErr } = await supabase
                 .from("store_stocks")
@@ -7530,7 +7583,14 @@ if (!existingInv?.id) {
           if (isPurchaseOrTransfer && destStoreId) {
             for (const it of sItems || []) {
               const moveQty = getMovementQty(it);
-              if (!it.product_id || moveQty <= 0) continue;
+              if (!it.product_id || moveQty <= 0) {
+                console.error('[sales POST] skipping purchase/transfer destination ensure (invalid normalized fields):', {
+                  index: (it as any)?.__idx,
+                  product_id: it?.product_id,
+                  moveQty,
+                });
+                continue;
+              }
 
               // Ensure destination store has a products row.
               // In this codebase, each store owns its own product rows.
@@ -7920,76 +7980,107 @@ if (!existingInv?.id) {
       console.error('[sales PUT] client balance reconciliation failed:', balanceErr);
       }
       
-      // STEP: Deduct stock from seller when payment is confirmed
-      if (body.payment_status === "paid" || body.payment_status === "partial") {
+      // STEP: Deduct stock from store_stocks when payment is confirmed
+      // IMPORTANT:
+      // - The source of truth for which store to decrement is the SALE itself (sales.store_id)
+      //   NOT products.created_by -> users.store_id (that breaks when products are cloned per store).
+      // - Use `caisse` when present (decimal) otherwise fallback to `quantity`.
+      // - Keep this block idempotent by only applying when payment becomes paid/partial AND
+      //   by marking the sale notes with a marker.
+      const effectivePaymentStatus = String((body as any).payment_status || (body as any).status || '').trim().toLowerCase();
+
+      const shouldDeductStock = effectivePaymentStatus === 'paid' || effectivePaymentStatus === 'partial';
+      const stockAppliedMarker = 'stock_deducted=1';
+
+      if (shouldDeductStock) {
         try {
-          const { data: saleItems, error: itemsError } = await supabase
-            .from("sale_items")
-            .select("*")
-            .eq("sale_id", saleId);
+          // Read sale row to resolve store_id and idempotency marker
+          const { data: saleRow, error: saleRowErr } = await supabase
+            .from('sales')
+            .select('id, store_id, notes')
+            .eq('id', saleId)
+            .maybeSingle();
+          if (saleRowErr) throw saleRowErr;
 
-          if (itemsError) throw itemsError;
+          const saleNotes = String((saleRow as any)?.notes || '');
+          if (saleNotes.includes(stockAppliedMarker)) {
+            console.log('[sales PUT] stock already deducted (marker present). Skipping.');
+          } else {
+            const saleStoreId = (saleRow as any)?.store_id ? String((saleRow as any).store_id) : null;
+            if (!saleStoreId) {
+              console.warn('[sales PUT] cannot deduct stock: sale.store_id is missing', { saleId });
+            } else {
+              const { data: saleItems, error: itemsError } = await supabase
+                .from('sale_items')
+                .select('product_id, caisse, quantity')
+                .eq('sale_id', saleId)
+                .limit(5000);
 
-          if (saleItems && saleItems.length > 0) {
-            for (const item of saleItems) {
-              // Get seller's store ID from product creator
-              const { data: productData, error: productError } = await supabase
-                .from("products")
-                .select("created_by")
-                .eq("id", item.product_id)
-                .single();
+              if (itemsError) throw itemsError;
 
-              if (productError) {
-                console.error("Error fetching product creator:", productError);
-                continue;
+              // Aggregate per product_id to handle large carts efficiently
+              // IMPORTANT BUSINESS RULE:
+              // - For BL sales, stock decrement is driven by `caisse` ONLY.
+              // - `quantity` is KG and must NOT decrement store stock.
+              const decByProductId = new Map<string, number>();
+              for (const it of (saleItems || [])) {
+                const pid = it?.product_id ? String(it.product_id) : '';
+                if (!pid) continue;
+
+                const rawCaisse = (it as any)?.caisse;
+                const caisse = typeof rawCaisse === 'string' ? Number(String(rawCaisse).replace(',', '.')) : Number(rawCaisse);
+                const dec = Number.isFinite(caisse) ? caisse : 0;
+                if (dec <= 0) continue;
+
+                decByProductId.set(pid, (decByProductId.get(pid) || 0) + dec);
               }
 
-              // Get the seller's store ID
-              const { data: userData, error: userError } = await supabase
-                .from("users")
-                .select("store_id")
-                .eq("id", productData?.created_by)
-                .single();
+              for (const [productId, dec] of decByProductId.entries()) {
+                const { data: row, error: rowErr } = await supabase
+                  .from('store_stocks')
+                  .select('id, quantity')
+                  .eq('product_id', productId)
+                  .eq('store_id', saleStoreId)
+                  .maybeSingle();
 
-              if (userError) {
-                console.error("Error fetching user store:", userError);
-                continue;
+                if (rowErr && (rowErr as any).code !== 'PGRST116') throw rowErr;
+
+                const currentQty = Number((row as any)?.quantity ?? 0) || 0;
+                const newQty = Math.max(0, currentQty - dec);
+
+                if ((row as any)?.id) {
+                  const { error: updErr } = await supabase
+                    .from('store_stocks')
+                    .update({ quantity: newQty })
+                    .eq('id', (row as any).id);
+                  if (updErr) throw updErr;
+                } else {
+                  const { error: insErr } = await supabase
+                    .from('store_stocks')
+                    .insert([{ product_id: productId, store_id: saleStoreId, quantity: newQty }]);
+                  if (insErr) throw insErr;
+                }
+
+                console.log(`[sales PUT] stock deducted (caisse-only) store=${saleStoreId} product=${productId} -${dec} => ${newQty}`);
               }
 
-              const productSellerStoreId = userData?.store_id;
+              // Mark sale as stock-applied (idempotency)
+              const nextNotes = saleNotes.includes(stockAppliedMarker)
+                ? saleNotes
+                : (saleNotes ? `${saleNotes} | ${stockAppliedMarker}` : stockAppliedMarker);
 
-              if (!productSellerStoreId) {
-                console.warn(`No store found for product creator`);
-                continue;
+              const { error: markErr } = await supabase
+                .from('sales')
+                .update({ notes: nextNotes, updated_at: new Date().toISOString() } as any)
+                .eq('id', saleId);
+
+              if (markErr) {
+                console.warn('[sales PUT] failed to mark stock applied:', markErr);
               }
-
-              // Decrease seller's stock when payment is confirmed
-              const { data: sellerStock, error: sellerError } = await supabase
-                .from("store_stocks")
-                .select("quantity")
-                .eq("product_id", item.product_id)
-                .eq("store_id", productSellerStoreId)
-                .single();
-
-              if (!sellerError && sellerStock) {
-                const newSellerQuantity = Math.max(0, sellerStock.quantity - item.quantity);
-                await supabase
-                  .from("store_stocks")
-                  .update({ quantity: newSellerQuantity })
-                  .eq("product_id", item.product_id)
-                  .eq("store_id", productSellerStoreId);
-                console.log(`✓ Seller store ${productSellerStoreId}: Product ${item.product_id} ${sellerStock.quantity} -> ${newSellerQuantity}`);
-              } else {
-                console.warn(`No store_stocks entry found for product ${item.product_id} in seller store ${productSellerStoreId}`);
-              }
-
-              // NOTE: Do NOT update products.quantity_available
-              // Only update store_stocks to keep total stock accurate
-              console.log(`✓ Stock deducted from seller store only (store_stocks table)`);
             }
           }
         } catch (stockError: any) {
-          console.error("Error decreasing stock:", stockError);
+          console.error('[sales PUT] Error decreasing stock:', stockError);
         }
       }
 
@@ -10345,7 +10436,64 @@ if (!existingInv?.id) {
 
       // STEP: Deduct stock from store_stocks for each item in the invoice
       const invoiceId = data?.[0]?.id;
-      const items = body.items || [];
+      // Normalize incoming items ONCE so all flows (sales + achat + transfer) use consistent fields.
+      // Backward compatible: accept product_id OR productId OR id, and quantity OR qty OR caisse.
+      const rawItems = Array.isArray(body.items) ? body.items : [];
+      const items = rawItems.map((it: any, idx: number) => {
+        // IMPORTANT:
+        // - `it.id` is often a client-side line id (timestamp/string) NOT a product id.
+        // - Only treat UUID-like values as product_id.
+        const candidateProductId = String(it?.product_id ?? it?.productId ?? it?.id ?? '').trim();
+        const product_id = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(candidateProductId)
+          ? candidateProductId
+          : '';
+        const quantity = toNum(it?.quantity ?? it?.qty ?? it?.caisse ?? 0);
+        const caisse = it?.caisse !== undefined && it?.caisse !== null ? toNum(it.caisse) : undefined;
+        // moveQty: for stock movements in purchase/transfer use caisse if present, else quantity.
+        const __moveQty = Number.isFinite(caisse as any) ? (caisse as number) : quantity;
+        return {
+          ...it,
+          product_id,
+          quantity,
+          caisse: caisse !== undefined ? caisse : it?.caisse,
+          __moveQty,
+          __idx: idx,
+        };
+      });
+
+      // Guardrails: prevent partial writes (sale created but stock not changed) due to bad lines.
+      const invalidLines = items
+        .filter((it: any) => !it.product_id || !Number.isFinite(it.quantity) || it.quantity <= 0)
+        .map((it: any) => ({ index: it.__idx, product_id: it.product_id, quantity: it.quantity }));
+      if (invalidLines.length > 0) {
+        console.error('[sales POST] Invalid sale items (missing product_id or quantity <= 0):', invalidLines);
+        return jsonResponse({ error: 'Invalid items: each item requires product_id and quantity > 0', invalidLines }, 400);
+      }
+
+      // Validate that all product_ids exist BEFORE creating the sale.
+      // This blocks users from sending arbitrary ids/names and creating inconsistent sales.
+      const productIds: string[] = Array.from(
+        new Set(
+          (items || [])
+            .map((it: any) => String(it.product_id))
+            .filter((id: any): id is string => Boolean(id))
+        )
+      );
+      if (productIds.length > 0) {
+        const { data: prodRows, error: prodErr } = await supabase
+          .from('products')
+          .select('id')
+          .in('id', productIds);
+        if (prodErr) throw prodErr;
+
+        const existing = new Set<string>((prodRows || []).map((r: any) => String(r.id)));
+        const missing: string[] = productIds.filter((id) => !existing.has(id));
+        if (missing.length > 0) {
+          console.error('[sales POST] Blocking sale: product_ids not found in products table:', missing);
+          return jsonResponse({ error: 'Invalid items: some product_id do not exist', missing_product_ids: missing }, 400);
+        }
+      }
+
       const stockDeductionResults: any[] = [];
       
       console.log("=== STOCK DEDUCTION STEP ===");
