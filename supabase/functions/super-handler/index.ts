@@ -1384,6 +1384,7 @@ async function handler(req: Request): Promise<Response> {
       const url = new URL(req.url);
       const requestedStoreId = String(url.searchParams.get('store_id') || '').trim() || null;
       const requestedStockReference = String(url.searchParams.get('stock_reference') || '').trim() || null;
+      const requestedSupplierId = String(url.searchParams.get('supplier_id') || '').trim() || null;
 
       const currentUser = await getCurrentUserWithRole(req);
       if (!currentUser) return jsonResponse({ error: 'Unauthorized' }, 401);
@@ -1403,6 +1404,7 @@ async function handler(req: Request): Promise<Response> {
 
       if (effectiveStoreId) q = q.eq('store_id', effectiveStoreId);
       if (requestedStockReference) q = q.eq('stock_reference', requestedStockReference);
+      if (requestedSupplierId) q = q.eq('supplier_id', requestedSupplierId);
 
       const { data: rows, error } = await q;
       if (error) throw error;
