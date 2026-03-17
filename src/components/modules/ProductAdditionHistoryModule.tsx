@@ -232,6 +232,10 @@ export default function ProductAdditionHistoryModule({ session }: { session: any
           ? moyenneFromDb
           : (caisseNum > 0 && quantite > 0 ? Number((quantite / caisseNum).toFixed(2)) : 0);
 
+        // IMPORTANT: In this page, "Valeur Totale" must be based on the operation quantity (quantite),
+        // not on caisse. This keeps the history consistent with the user's expectation.
+        const computedTotalValue = (Number.isFinite(quantite) ? quantite : 0) * (Number.isFinite(purchase) ? purchase : 0);
+
         return {
           id: row.id,
           product_id: row.product_id,
@@ -251,7 +255,8 @@ export default function ProductAdditionHistoryModule({ session }: { session: any
           avg_net_weight_per_box: row.moyenne,
           fourchette_min: row.fourchette_min,
           fourchette_max: row.fourchette_max,
-          total_value: Number(row.total_value ?? (caisseNum * purchase)) || 0,
+          // Use computed value (quantite × prix_achat). Do not use row.total_value (which is caisse × prix_achat).
+          total_value: computedTotalValue,
           stock_reference: row.stock_reference || '',
           caisse,
           moyenne,
