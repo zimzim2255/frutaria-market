@@ -18,6 +18,11 @@ interface SupplierDetailsPageProps {
 }
 
 export function SupplierDetailsPage({ supplier, session, onBack }: SupplierDetailsPageProps) {
+  // NOTE:
+  // `supplierProducts` is used for the "Achat" (stock additions) tab.
+  // It MUST be immutable history, not the current `products` table, otherwise edits/restocks
+  // will rewrite the past.
+  // Source of truth: `product_additions_history` (append-only).
   const [supplierProducts, setSupplierProducts] = useState<any[]>([]);
 
   // Payment correction (audit-safe) UI state
@@ -128,11 +133,20 @@ export function SupplierDetailsPage({ supplier, session, onBack }: SupplierDetai
   };
 
   const fetchSupplierProducts = async () => {
+    // IMPORTANT FIX:
+    // "Détails du fournisseur" -> "Achat" must come from immutable history.
+    // We use `product_additions_history` (append-only) via the super-handler endpoint.
+    // Each row is a separate stock addition line, even if the same reference/stock_reference
+    // appears multiple times.
     try {
       setProductsLoading(true);
 
+      const qs = new URLSearchParams();
+      if (supplier?.id) qs.set('supplier_id', String(supplier.id));
+      if (supplier?.store_id) qs.set('store_id', String(supplier.store_id));
+
       const res = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/super-handler/products`,
+        `https://${projectId}.supabase.co/functions/v1/super-handler/product-additions-history?${qs.toString()}`,
         {
           headers: {
             Authorization: `Bearer ${session.access_token}`,
@@ -140,75 +154,40 @@ export function SupplierDetailsPage({ supplier, session, onBack }: SupplierDetai
         }
       );
 
-      if (res.ok) {
-        const data = await res.json();
-        const all = data.products || [];
-
-        // IMPORTANT:
-        // Détails du fournisseur -> Achat must be based on STOCK REFERENCES, not on current product rows,
-        // because product rows can be updated later (restock) and would otherwise "overwrite" history.
-        // We therefore include products that match this supplier either by:
-        // - supplier_id (direct)
-        // - OR stock_reference_details.supplier_id (indirect / historical)
-        //
-        // We implement the indirect matching client-side by fetching details for all stock refs
-        // found in products and mapping stock_reference -> supplier_id.
-
-        const supplierIdStr = String(supplier?.id || '');
-
-        // 1) Get candidate products (those having stock_reference)
-        const productsWithRef = (all || []).filter((p: any) => p?.stock_reference);
-        const uniqueStockRefs = Array.from(
-          new Set(productsWithRef.map((p: any) => String(p.stock_reference).trim()).filter(Boolean))
-        );
-
-        // 2) Fetch stock_reference_details for each ref (best-effort)
-        const stockRefToSupplierId = new Map<string, string>();
-
-        await Promise.all(
-          (uniqueStockRefs as string[]).map(async (ref: string) => {
-            try {
-              const detailsRes = await fetch(
-                `https://${projectId}.supabase.co/functions/v1/super-handler/stock-reference-details?stock_reference=${encodeURIComponent(ref)}`,
-                { headers: { Authorization: `Bearer ${session.access_token}` } }
-              );
-              if (!detailsRes.ok) return;
-              const detailsPayload = await detailsRes.json().catch(() => ({}));
-              const details = (detailsPayload as any)?.details ?? detailsPayload;
-              const sid = String(details?.supplier_id || '').trim();
-              if (sid) stockRefToSupplierId.set(ref, sid);
-            } catch {
-              // ignore
-            }
-          })
-        );
-
-        // 3) Filter products:
-        // - direct match (supplier_id)
-        // - OR indirect match by stock_reference_details.supplier_id
-        // IMPORTANT: do NOT let a stock_reference appear under multiple suppliers.
-        // If stock_reference_details has a supplier_id, it is the source of truth.
-        // Only fall back to product.supplier_id when there is NO stock_reference_details entry.
-        const list = (all || []).filter((p: any) => {
-          const ref = String(p?.stock_reference || '').trim();
-
-          // If product has a stock_reference and we have a mapped supplier for it,
-          // enforce it strictly.
-          if (ref) {
-            const mappedSupplierId = stockRefToSupplierId.get(ref);
-            if (mappedSupplierId) return String(mappedSupplierId) === supplierIdStr;
-          }
-
-          // No stock_reference_details mapping => fall back to direct product.supplier_id
-          return String(p?.supplier_id || '') === supplierIdStr;
-        });
-
-        setSupplierProducts(list);
-      } else {
+      if (!res.ok) {
         setSupplierProducts([]);
+        return;
       }
+
+      const data = await res.json().catch(() => ({}));
+      const rows = Array.isArray((data as any)?.history)
+        ? (data as any).history
+        : Array.isArray((data as any)?.product_additions_history)
+          ? (data as any).product_additions_history
+          : Array.isArray((data as any)?.rows)
+            ? (data as any).rows
+            : Array.isArray((data as any)?.data)
+              ? (data as any).data
+              : [];
+
+      // CRITICAL FIX:
+      // The backend endpoint currently does NOT filter by supplier_id.
+      // Filter client-side so each supplier only sees its own history.
+      const supplierIdStr = String(supplier?.id || '').trim();
+      const filtered = supplierIdStr
+        ? (rows || []).filter((r: any) => String(r?.supplier_id || '').trim() === supplierIdStr)
+        : [];
+
+      // Sort newest first (UI expectation)
+      const list = (filtered || []).slice().sort((a: any, b: any) => {
+        const da = new Date(a?.created_at || 0).getTime();
+        const db = new Date(b?.created_at || 0).getTime();
+        return db - da;
+      });
+
+      setSupplierProducts(list);
     } catch (e) {
-      console.error('Error fetching supplier products:', e);
+      console.error('Error fetching supplier products history:', e);
       setSupplierProducts([]);
     } finally {
       setProductsLoading(false);
@@ -1221,96 +1200,52 @@ export function SupplierDetailsPage({ supplier, session, onBack }: SupplierDetai
       });
     });
 
-    // Achat (Stock Achat tab): export by STOCK REFERENCE rows, not by raw products rows.
-    // Raw products can have quantity=0 (because inventory may have changed later), so exporting per product row
-    // creates confusing "empty" achat lines. The Stock Achat tab is grouped by stock_reference, so we export
-    // exactly those grouped rows.
+    // Achat (Stock Achat tab): export EXACTLY what is displayed in the UI.
+    // IMPORTANT FIX:
+    // - We no longer group by stock_reference.
+    // - Each history row is exported as its own "Achat" line, even if reference/stock_reference repeats.
     try {
-      const grouped: Record<string, {
-        ref: string;
-        rawDate: any;
-        count: number;
-        qtyTotal: number;
-        valueTotal: number;
-        priceAvg: number;
-      }> = {};
+      (filteredSupplierProducts || []).forEach((row: any, idx: number) => {
+        const rawDate = row?.created_at || null;
 
-      (filteredSupplierProducts || []).forEach((prod: any, idx: number) => {
-        const ref = String(prod?.stock_reference || prod?.reference || prod?.id || idx).trim();
-        if (!ref) return;
+        const qty = Number(
+          row?.quantite ??
+          row?.number_of_boxes ??
+          row?.caisse ??
+          row?.quantity_available ??
+          row?.quantity ??
+          row?.qty ??
+          0
+        ) || 0;
 
-        const rawDate = prod.created_at || prod.updated_at || prod.last_updated || null;
+        const unit = Number(
+          row?.purchase_price ??
+          row?.buy_price ??
+          row?.unit_price ??
+          row?.price ??
+          0
+        ) || 0;
 
-        // IMPORTANT: export must use the EXACT same frontend calculation used by the Stock Achat table row.
-        // The UI uses getQty() and getRowValeurTotale() in the Stock Achat tab.
-        const getQtyForExport = (p: any) => {
-          // Must match Stock Achat table grouping logic (operation quantity).
-          // In this app, the purchase quantity is stored in number_of_boxes.
-          return Number(
-            p?.number_of_boxes ??
-            p?.quantity_available ??
-            p?.quantity ??
-            p?.qty ??
-            0
-          ) || 0;
-        };
+        const total = qty * unit;
 
-        const getRowValeurTotaleForExport = (p: any) => {
-          const quantity = getQtyForExport(p);
-          const unit = Number(
-            p?.purchase_price ??
-            p?.buy_price ??
-            p?.unit_price ??
-            p?.sale_price ??
-            p?.price ??
-            0
-          ) || 0;
-          return quantity * unit;
-        };
-
-        const qty = getQtyForExport(prod);
-        const value = getRowValeurTotaleForExport(prod);
-
-        if (!grouped[ref]) {
-          grouped[ref] = {
-            ref,
-            rawDate,
-            count: 0,
-            qtyTotal: 0,
-            valueTotal: 0,
-            priceAvg: 0,
-          };
-        }
-
-        grouped[ref].count += 1;
-        grouped[ref].qtyTotal += qty;
-        grouped[ref].valueTotal += value;
-
-        // keep earliest date as "operation date" (to match chronological export)
-        const curT = sortTime(grouped[ref].rawDate);
-        const nextT = sortTime(rawDate);
-        if (nextT && (!curT || nextT < curT)) grouped[ref].rawDate = rawDate;
-      });
-
-      Object.values(grouped).forEach((g) => {
-        const avg = g.qtyTotal > 0 ? (g.valueTotal / g.qtyTotal) : 0;
-        const notes = `Stock ref: ${g.ref} | Produits: ${g.count} | Qté totale: ${g.qtyTotal.toFixed(2)} | Valeur totale: ${g.valueTotal.toFixed(2)} | Prix moyen: ${avg.toFixed(2)}`;
+        const ref = String(row?.stock_reference || row?.reference || row?.id || idx).trim() || '-';
+        const notes = String(row?.notes || row?.reason || '').trim();
 
         rows.push({
           _type: 'Achat',
-          _sort: sortTime(g.rawDate),
-          _dateStr: fmtDateTime(g.rawDate),
-          _amount: g.valueTotal,
+          _sort: sortTime(rawDate),
+          _dateStr: fmtDateTime(rawDate),
+          _amount: total,
           _method: 'STOCK',
-          _reference: g.ref,
+          _reference: ref,
           _coffer: '-',
-          _actor: '-',
-          _notes: notes,
+          _actor: row?.created_by_email || row?.created_by || '-',
+          _notes: notes || `Ajout stock (${ref})`,
           _remise: 0,
         });
       });
     } catch {
-      // ignore grouping failure
+      // ignore
     }
 
     // Chèques utilisés
@@ -2171,6 +2106,7 @@ export function SupplierDetailsPage({ supplier, session, onBack }: SupplierDetai
                       // - number_of_boxes   = Quantité (movement)
                       // For Achat grouping, we want the operation quantity => prefer number_of_boxes.
                       const qty = Number(
+                      (product as any).quantite ??
                       (product as any).number_of_boxes ??
                       (product as any).quantity ??
                       (product as any).qte ??
@@ -2189,7 +2125,9 @@ export function SupplierDetailsPage({ supplier, session, onBack }: SupplierDetai
                       ) || 0;
                       
                       acc[groupKey].total_quantity += qty;
-                      acc[groupKey].total_value += (qty * price);
+                      // Prefer immutable history precomputed total_value when available.
+                      const rowTotalValue = Number((product as any).total_value ?? (product as any).totalValue ?? 0) || 0;
+                      acc[groupKey].total_value += (rowTotalValue > 0 ? rowTotalValue : (qty * price));
                       acc[groupKey].product_count += 1;
                       return acc;
                       }, {});
@@ -2581,7 +2519,7 @@ export function SupplierDetailsPage({ supplier, session, onBack }: SupplierDetai
                 // - Quantité is stored in number_of_boxes
                 // Totals in Stock Ref Details v2 must match the add-stock "Sous-total" logic:
                 //   Sous-total = Quantité * Prix Unitaire
-                const getQty = (p: any) => Number(p?.number_of_boxes ?? 0) || 0;
+                const getQty = (p: any) => Number(p?.quantite ?? p?.number_of_boxes ?? 0) || 0;
 
                 const getPrice = (p: any) =>
                   Number(p?.purchase_price ?? p?.unit_price ?? p?.unitPrice ?? p?.price ?? p?.sale_price ?? 0) || 0;
@@ -2590,7 +2528,7 @@ export function SupplierDetailsPage({ supplier, session, onBack }: SupplierDetai
                 // Valeur Totale must be: Quantité (number_of_boxes) * Prix Unitaire.
                 // IMPORTANT: do NOT use "Caisse" (quantity_available) for value calculation.
                 const getRowValeurTotale = (p: any) => {
-                  const quantity = Number((p as any).number_of_boxes ?? 0) || 0;
+                  const quantity = Number((p as any).quantite ?? (p as any).number_of_boxes ?? 0) || 0;
                   const unit = Number((p as any).purchase_price ?? (p as any).unit_price ?? (p as any).sale_price ?? 0) || 0;
                   const v = quantity * unit;
                   return Number.isFinite(v) ? v : 0;
@@ -2790,7 +2728,7 @@ export function SupplierDetailsPage({ supplier, session, onBack }: SupplierDetai
                             </tr>
                           ) : (
                             productsInRef.map((product: any) => {
-                              const quantity = Number(product.number_of_boxes || 0) || 0;
+                              const quantity = Number(product.quantite ?? product.number_of_boxes ?? 0) || 0;
                               // IMPORTANT:
                               // In this app:
                               // - Caisse  (stock)  is stored in quantity_available
@@ -2799,13 +2737,14 @@ export function SupplierDetailsPage({ supplier, session, onBack }: SupplierDetai
                               //   Quantité = number_of_boxes
                               //   Caisse   = quantity_available
                               const caisse = Number(
+                                product.caisse ??
                                 product.quantity_available ??
                                 product.quantity ??
                                 product.qte ??
                                 product.initial_quantity ??
                                 0
                               ) || 0;
-                              const quantite = Number(product.number_of_boxes || 0) || 0;
+                              const quantite = Number(product.quantite ?? product.number_of_boxes ?? 0) || 0;
 
                               // Moyenne = Quantité / Caisse
                               const moyenne = caisse > 0 ? (quantite / caisse).toFixed(2) : '-';
