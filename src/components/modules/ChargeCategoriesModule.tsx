@@ -30,14 +30,17 @@ export function ChargeCategoriesModule({ session }: ChargeCategoriesModuleProps)
   });
 
   // Check if user is admin
+  // IMPORTANT: this app's source of truth for role is the `users` table (loaded in AdminDashboard).
+  // session.user.user_metadata.role is often missing/outdated, which incorrectly blocks real admins.
   useEffect(() => {
     const checkAdmin = async () => {
       try {
-        if (session?.user?.user_metadata?.role === 'admin') {
-          setIsAdmin(true);
-        } else {
-          setIsAdmin(false);
-        }
+        const roleFromMeta = String(session?.user?.user_metadata?.role || '').trim().toLowerCase();
+        const roleFromStorage = String(localStorage.getItem('userRole') || '').trim().toLowerCase();
+
+        // Prefer role resolved from DB (cached by AdminDashboard into localStorage), fallback to auth metadata.
+        const effectiveRole = roleFromStorage || roleFromMeta;
+        setIsAdmin(effectiveRole === 'admin');
       } catch (error) {
         console.error('Error checking admin status:', error);
         setIsAdmin(false);

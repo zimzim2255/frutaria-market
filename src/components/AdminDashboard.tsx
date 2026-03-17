@@ -105,6 +105,7 @@ export function AdminDashboard({ session, supabase }: AdminDashboardProps) {
             const role = currentUser.role || 'user';
             setUserRole(role);
             setUserPermissions(currentUser.permissions || []);
+            try { localStorage.setItem('userRole', String(role)); } catch (_e) {}
             console.log('User found:', currentUser.email, 'Role:', role);
           } else {
             // If still not found after the call, wait a moment and try again
@@ -128,27 +129,32 @@ export function AdminDashboard({ session, supabase }: AdminDashboardProps) {
                 const role = retryUser.role || 'user';
                 setUserRole(role);
                 setUserPermissions(retryUser.permissions || []);
+                try { localStorage.setItem('userRole', String(role)); } catch (_e) {}
                 console.log('User found on retry:', retryUser.email, 'Role:', role);
               } else {
                 // Still not found -> safest default: user with no permissions
                 console.warn('User not found after retry, defaulting to user (no permissions)');
                 setUserRole('user');
                 setUserPermissions([]);
+                try { localStorage.setItem('userRole', 'user'); } catch (_e) {}
               }
             } else {
               setUserRole('user');
               setUserPermissions([]);
+              try { localStorage.setItem('userRole', 'user'); } catch (_e) {}
             }
           }
         } else {
           setUserRole('user');
           setUserPermissions([]);
+          try { localStorage.setItem('userRole', 'user'); } catch (_e) {}
         }
       } catch (error) {
         console.error('Error fetching user data:', error);
         // On error, safest default: user with no permissions
         setUserRole('user');
         setUserPermissions([]);
+        try { localStorage.setItem('userRole', 'user'); } catch (_e) {}
       } finally {
         setLoadingUser(false);
       }
