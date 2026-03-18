@@ -861,6 +861,32 @@ export function ProductsModule({ session }: ProductsModuleProps) {
               `Product with reference ${article.reference} already exists. Store qty: ${storeQty}, Adding: ${addCaisse}, New total: ${newQuantity}`
             );
 
+            // Resolve supplier_id for this stock_reference so the PUT request includes it.
+            // This keeps product_additions_history attribution correct even if product.supplier_id is stale.
+            let resolvedSupplierId: string | null = null;
+            try {
+              const sr = String(allocatedStockReference || '').trim();
+              if (sr) {
+                const detailsResp = await fetch(
+                  `https://${projectId}.supabase.co/functions/v1/super-handler/stock-reference-details?stock_reference=${encodeURIComponent(sr)}`,
+                  {
+                    method: 'GET',
+                    headers: {
+                      'Authorization': `Bearer ${session.access_token}`,
+                    },
+                  }
+                );
+
+                if (detailsResp.ok) {
+                  const detailsJson = await detailsResp.json().catch(() => ({}));
+                  const sid = detailsJson?.details?.supplier_id;
+                  if (sid) resolvedSupplierId = String(sid).trim();
+                }
+              }
+            } catch (e) {
+              console.warn('[ProductsModule] Failed to resolve supplier_id for PUT from stock-reference-details:', e);
+            }
+
             const updateResponse = await fetch(
               `https://${projectId}.supabase.co/functions/v1/super-handler/products/${existingProduct.id}`,
               {
@@ -889,6 +915,9 @@ export function ProductsModule({ session }: ProductsModuleProps) {
 
                   // Backend needs store_id to update the correct store_stocks row
                   store_id: targetStoreId,
+
+                  // Include supplier_id when possible (resolved from stock_reference_details)
+                  ...(resolvedSupplierId ? { supplier_id: resolvedSupplierId } : {}),
                 }),
               }
             );

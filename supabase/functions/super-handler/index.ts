@@ -271,6 +271,45 @@ function round2(n: number): number {
   return Math.round((n + Number.EPSILON) * 100) / 100;
 }
 
+async function resolveSupplierIdForProductAdditionHistory(params: {
+  bodySupplierId?: any;
+  bodyStockReference?: any;
+  fallbackSupplierId?: any;
+}): Promise<string | null> {
+  // Supplier resolution priority:
+  // 1) Explicit supplier_id in request body
+  // 2) supplier_id from stock_reference_details (source of truth for the UI flow)
+  // 3) fallback to current product supplier_id
+  const explicit = params.bodySupplierId !== undefined && params.bodySupplierId !== null
+    ? String(params.bodySupplierId).trim()
+    : '';
+  if (explicit) return explicit;
+
+  const stockRef = params.bodyStockReference !== undefined && params.bodyStockReference !== null
+    ? String(params.bodyStockReference).trim()
+    : '';
+
+  if (stockRef) {
+    const { data: srRow, error: srErr } = await supabase
+      .from('stock_reference_details')
+      .select('supplier_id')
+      .eq('stock_reference', stockRef)
+      .maybeSingle();
+
+    if (srErr) {
+      console.error('[resolveSupplierIdForProductAdditionHistory] stock_reference_details lookup failed:', srErr);
+    } else {
+      const sid = srRow?.supplier_id ? String(srRow.supplier_id).trim() : '';
+      if (sid) return sid;
+    }
+  }
+
+  const fb = params.fallbackSupplierId !== undefined && params.fallbackSupplierId !== null
+    ? String(params.fallbackSupplierId).trim()
+    : '';
+  return fb || null;
+}
+
 async function insertProductAdditionHistoryRow(params: {
   created_at?: string;
   created_by: string | null;
@@ -2042,6 +2081,40 @@ async function handler(req: Request): Promise<Response> {
       const role = normalizeRole(currentUserWithRole.role);
       const isAdmin = role === 'admin';
 
+      // PRODUCTION-SAFE FIX:
+      // Resolve supplier_id for product_additions_history without changing product update semantics.
+      // Priority: body.supplier_id -> stock_reference_details.supplier_id (by body.stock_reference) -> fallback to product.supplier_id
+      const resolveHistorySupplierId = async (fallbackSupplierId: any) => {
+        const explicit = body?.supplier_id !== undefined && body?.supplier_id !== null
+          ? String(body.supplier_id).trim()
+          : '';
+        if (explicit) return explicit;
+
+        const stockRef = body?.stock_reference !== undefined && body?.stock_reference !== null
+          ? String(body.stock_reference).trim()
+          : '';
+
+        if (stockRef) {
+          const { data: srRow, error: srErr } = await supabase
+            .from('stock_reference_details')
+            .select('supplier_id')
+            .eq('stock_reference', stockRef)
+            .maybeSingle();
+
+          if (!srErr) {
+            const sid = srRow?.supplier_id ? String(srRow.supplier_id).trim() : '';
+            if (sid) return sid;
+          } else {
+            console.error('[products PUT] stock_reference_details lookup failed:', srErr);
+          }
+        }
+
+        const fb = fallbackSupplierId !== undefined && fallbackSupplierId !== null
+          ? String(fallbackSupplierId).trim()
+          : '';
+        return fb || null;
+      };
+
       // Resolve effective store_id (admin can choose, others forced)
       const requestedStoreId = body.store_id ? String(body.store_id).trim() : null;
       const metaStoreId = String((currentUserWithRole as any)?.user_metadata?.store_id || '').trim() || null;
@@ -2187,17 +2260,17 @@ async function handler(req: Request): Promise<Response> {
         const totalValue = caisse * purchase;
 
         await insertProductAdditionHistoryRow({
-          created_at: new Date().toISOString(),
-          created_by: authUser?.id || null,
-          created_by_email: authUser?.email || null,
-          store_id: effectiveStoreId,
-          product_id: String(targetProduct.id),
-          stock_reference: targetProduct.stock_reference || null,
-          reference: targetProduct.reference || null,
-          name: targetProduct.name || null,
-          category: targetProduct.category || null,
-          supplier_id: targetProduct.supplier_id || null,
-          lot: targetProduct.lot || null,
+        created_at: new Date().toISOString(),
+        created_by: authUser?.id || null,
+        created_by_email: authUser?.email || null,
+        store_id: effectiveStoreId,
+        product_id: String(targetProduct.id),
+        stock_reference: targetProduct.stock_reference || null,
+        reference: targetProduct.reference || null,
+        name: targetProduct.name || null,
+        category: targetProduct.category || null,
+        supplier_id: await resolveHistorySupplierId(targetProduct.supplier_id),
+        lot: targetProduct.lot || null,
           purchase_price: purchase,
           sale_price: toNum(targetProduct.sale_price ?? 0),
           fourchette_min: targetProduct.fourchette_min ?? null,
@@ -2506,7 +2579,11 @@ async function handler(req: Request): Promise<Response> {
             reference: newProduct.reference || body.reference || null,
             name: newProduct.name || body.name || null,
             category: newProduct.category || body.category || null,
-            supplier_id: newProduct.supplier_id || body.supplier_id || null,
+            supplier_id: await resolveSupplierIdForProductAdditionHistory({
+              bodySupplierId: body.supplier_id,
+              bodyStockReference: body.stock_reference || newProduct.stock_reference,
+              fallbackSupplierId: newProduct.supplier_id,
+            }),
             lot: newProduct.lot || body.lot || null,
             purchase_price: purchase,
             sale_price: toNum(body.sale_price ?? newProduct.sale_price ?? 0),
@@ -2656,7 +2733,11 @@ async function handler(req: Request): Promise<Response> {
               reference: body.reference ?? currentProduct.reference ?? null,
               name: body.name ?? currentProduct.name ?? null,
               category: body.category ?? currentProduct.category ?? null,
-              supplier_id: body.supplier_id ?? currentProduct.supplier_id ?? null,
+              supplier_id: await resolveSupplierIdForProductAdditionHistory({
+              bodySupplierId: body.supplier_id,
+              bodyStockReference: body.stock_reference || currentProduct.stock_reference,
+              fallbackSupplierId: currentProduct.supplier_id,
+            }),
               lot: body.lot ?? currentProduct.lot ?? null,
               purchase_price: purchase,
               sale_price: toNum(body.sale_price ?? currentProduct.sale_price ?? 0),
@@ -7393,10 +7474,10 @@ if (!existingInv?.id) {
         const saleNumber = String(data?.[0]?.sale_number || body.sale_number || "");
         const isPurchaseOrTransfer = saleNumber.includes("PURCHASE-") || saleNumber.includes("TRANSFER-");
 
-        // For normal sales, decrement only when the sale is effectively paid/partial.
-        // Accept both `payment_status` and `status` (frontend NO-PDF uses `status`).
-        const effectivePaymentStatus = String((body as any).payment_status || (body as any).status || '').trim().toLowerCase();
-        const shouldDeductForNormalSale = !isPurchaseOrTransfer && (effectivePaymentStatus === 'paid' || effectivePaymentStatus === 'partial');
+        // For normal sales (BL / Bon de Commande), ALWAYS decrement stock at creation time.
+        // Business rule (per request): unpaid/partial/paid must all behave like "payée" for stock.
+        // We still keep idempotency via the stock_deducted marker.
+        const shouldDeductForNormalSale = !isPurchaseOrTransfer;
 
         if (shouldDeductForNormalSale && saleId) {
           const saleStoreId = finalStoreId ? String(finalStoreId) : (body.store_id ? String(body.store_id) : null);

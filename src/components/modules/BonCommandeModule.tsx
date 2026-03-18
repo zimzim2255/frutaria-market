@@ -695,9 +695,24 @@ export default function BonCommandeModule({ session, onBack, sale, adminSelected
       });
     }
 
-    // Payment validation: require montant payé for cash & bank transfer (as requested)
-    if (orderData.paymentMethod === 'cash' || orderData.paymentMethod === 'bank_transfer') {
-      const paid = Number(orderData.amountPaid);
+    // Payment validation:
+    // - Non Payée: amountPaid must be 0 (or empty)
+    // - Partiellement payée: amountPaid must be > 0 and < total
+    // - Payée: amountPaid must be >= total
+    // NOTE: We validate based on the selected status, not only on payment method.
+    const totals = calculateTotals();
+    const paid = Number(orderData.amountPaid ?? 0);
+
+    if (orderData.status === 'Non Payée') {
+      // Allow empty input; treat as 0
+      if (Number.isFinite(paid) && paid > 0) {
+        errors.push('Montant Payé');
+      }
+    } else if (orderData.status === 'Partiellement payée') {
+      if (!Number.isFinite(paid) || paid <= 0 || paid >= totals.total) {
+        errors.push('Montant Payé');
+      }
+    } else if (orderData.status === 'Payée') {
       if (!Number.isFinite(paid) || paid <= 0) {
         errors.push('Montant Payé');
       }
@@ -902,6 +917,12 @@ export default function BonCommandeModule({ session, onBack, sale, adminSelected
             // Keep UI consistent
             setBlId(finalBlId);
 
+            const computedStatus = orderData.status === 'Payée'
+              ? 'paid'
+              : (orderData.status === 'Partiellement payée' ? 'partial' : 'unpaid');
+
+            const paidAmount = Number(orderData.amountPaid ?? 0) || 0;
+
             const salePayload = {
             sale_number: finalBlId,
             // Stable client reference for safe balance reconciliation on edits.
@@ -923,10 +944,13 @@ export default function BonCommandeModule({ session, onBack, sale, adminSelected
             total_remise: Math.max(0, Number(orderData.remiseAmount || 0) || 0),
             // Backward-compat alias (some code paths used camelCase previously)
             totalRemise: Math.max(0, Number(orderData.remiseAmount || 0) || 0),
-            amount_paid: (orderData.paymentMethod === 'cash' || orderData.paymentMethod === 'bank_transfer') ? (orderData.amountPaid || 0) : 0,
-            remaining_balance: (orderData.paymentMethod === 'cash' || orderData.paymentMethod === 'bank_transfer') ? Math.max(0, totals.total - (orderData.amountPaid || 0)) : totals.total,
+            amount_paid: paidAmount,
+            remaining_balance: Math.max(0, totals.total - paidAmount),
             tva_percentage: 0,
-            status: orderData.status === 'Payée' ? 'paid' : 'pending',
+            // IMPORTANT: backend expects payment_status (not status) to drive stock deduction.
+            payment_status: computedStatus,
+            // Keep legacy field too (some code paths still read it)
+            status: computedStatus,
             invoice_date: orderData.invoiceDate,
             execution_date: orderData.executionDate,
             items: transformedItems,
