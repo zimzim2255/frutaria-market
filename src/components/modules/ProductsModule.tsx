@@ -2378,8 +2378,8 @@ export function ProductsModule({ session }: ProductsModuleProps) {
                             <Input
                             value={article.reference}
                             onChange={(e) => {
-                            const role = String(effectiveUserRole || '').toLowerCase();
-                            if (role === 'manager') return;
+                            const isLocked = !!String(article.reference || '').trim();
+                            if (isLocked) return;
                             
                             const newValue = e.target.value;
                             
@@ -2405,20 +2405,34 @@ export function ProductsModule({ session }: ProductsModuleProps) {
                             }}
                             placeholder="PROD-20240115-47392"
                             className="h-8 flex-1"
-                            readOnly={String(effectiveUserRole || '').toLowerCase() === 'manager' || ((article.reference || '').trim() && products.some(p => String(p.reference || '').trim() === String(article.reference || '').trim()))}
-                            disabled={String(effectiveUserRole || '').toLowerCase() === 'manager' || ((article.reference || '').trim() && products.some(p => String(p.reference || '').trim() === String(article.reference || '').trim()))}
-                            title={String(effectiveUserRole || '').toLowerCase() === 'manager'
+                            readOnly={
+                            // Editable only when blank; once a reference is set (typically via suggestion/template), lock it.
+                            String(effectiveUserRole || '').toLowerCase() === 'manager' ||
+                            !!String(article.reference || '').trim()
+                            }
+                            disabled={
+                            String(effectiveUserRole || '').toLowerCase() === 'manager' ||
+                            !!String(article.reference || '').trim()
+                            }
+                            title={
+                            String(effectiveUserRole || '').toLowerCase() === 'manager'
                             ? 'Désactivé pour votre compte'
-                            : ((article.reference || '').trim() && products.some(p => String(p.reference || '').trim() === String(article.reference || '').trim()))
-                            ? 'Référence existante: non modifiable'
-                            : undefined}
+                            : (String(article.reference || '').trim() ? 'Référence définie: non modifiable' : undefined)
+                            }
                             />
                             <Button
                             type="button"
                             onClick={(e) => {
                             const role = String(effectiveUserRole || '').toLowerCase();
                             const isAdminRole = role === 'admin';
-                            if (!isAdminRole || role === 'manager') {
+                            if (!isAdminRole) {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            return;
+                            }
+                            
+                            // Lock rule: once a reference is set, it must not be changed.
+                            if (String(article.reference || '').trim()) {
                             e.preventDefault();
                             e.stopPropagation();
                             return;
@@ -2440,17 +2454,16 @@ export function ProductsModule({ session }: ProductsModuleProps) {
                             ? { backgroundColor: '#6366f1', color: 'white' }
                             : { backgroundColor: '#9ca3af', color: 'white', pointerEvents: 'none' }}
                             title={(() => {
-                            const isExisting = (article.reference || '').trim() && products.some(p => String(p.reference || '').trim() === String(article.reference || '').trim());
                             const role = String(effectiveUserRole || '').toLowerCase();
                             if (role === 'manager') return 'Désactivé pour votre compte';
                             if (role !== 'admin') return 'Désactivé pour votre compte';
-                            if (isExisting) return 'Désactivé: cette référence existe déjà';
+                            if (String(article.reference || '').trim()) return 'Référence définie: non modifiable';
                             return 'Générer une référence automatique';
                             })()}
                             disabled={
                             String(effectiveUserRole || '').toLowerCase() !== 'admin' ||
                             String(effectiveUserRole || '').toLowerCase() === 'manager' ||
-                            ((article.reference || '').trim() && products.some(p => String(p.reference || '').trim() === String(article.reference || '').trim()))
+                            !!String(article.reference || '').trim()
                             }
                             >
                             🔄

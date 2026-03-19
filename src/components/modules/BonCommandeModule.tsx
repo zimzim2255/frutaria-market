@@ -667,7 +667,17 @@ export default function BonCommandeModule({ session, onBack, sale, adminSelected
 
     // Client fields
     // Only client name is required (phone/address/ICE are optional as requested)
-    if (!orderData.client.name?.trim()) errors.push('Nom du Client');
+    if (!orderData.client.name?.trim()) {
+      errors.push('Nom du Client');
+    } else {
+      // Check if the client exists in the database
+      const clientExists = clients.some(
+        (c: any) => c.name?.toLowerCase().trim() === orderData.client.name.toLowerCase().trim()
+      );
+      if (!clientExists) {
+        errors.push(`Client "${orderData.client.name}" non trouvé dans la base de données`);
+      }
+    }
 
     // Dates (required)
     if (!orderData.invoiceDate?.trim()) errors.push('Date de Facture');

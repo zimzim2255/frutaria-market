@@ -78,6 +78,22 @@ interface ProductAdditionStats {
 }
 
 export default function StockReferenceHistoryModule({ session }: { session: any }) {
+  // Debug helper: log the exact request body that is sent for product-additions-history PATCH.
+  // This helps detect cases where DevTools shows a different payload than what we think we send.
+  const debugLogPatchRequest = (historyRowId: string, body: any) => {
+    try {
+      const bodyString = typeof body === 'string' ? body : JSON.stringify(body);
+      console.log('[stock-reference-history] PATCH request about to send', {
+        history_row_id: historyRowId,
+        bodyString,
+      });
+    } catch (e) {
+      console.log('[stock-reference-history] PATCH request about to send (unstringifiable body)', {
+        history_row_id: historyRowId,
+        body,
+      });
+    }
+  };
   const [additions, setAdditions] = useState<ProductAddition[]>([]);
   const [filteredAdditions, setFilteredAdditions] = useState<ProductAddition[]>([]);
   const [currentUserRole, setCurrentUserRole] = useState<string>('user');
@@ -278,6 +294,10 @@ export default function StockReferenceHistoryModule({ session }: { session: any 
         // In this module, "Quantité Ajoutée" represents the quantity field (not caisse).
         const effectiveQuantity = quantite;
 
+        // Use computed value (quantite × prix_achat). Do not use row.total_value (which is caisse × prix_achat).
+        // Existing DB rows were saved with the old formula and are causing wrong totals.
+        const computedTotalValue = (Number.isFinite(quantite) ? quantite : 0) * (Number.isFinite(purchase) ? purchase : 0);
+
         return {
           id: row.id,
           product_id: row.product_id,
@@ -298,7 +318,7 @@ export default function StockReferenceHistoryModule({ session }: { session: any 
           avg_net_weight_per_box: row.moyenne,
           fourchette_min: row.fourchette_min,
           fourchette_max: row.fourchette_max,
-          total_value: Number(row.total_value ?? (caisseNum * purchase)) || 0,
+          total_value: computedTotalValue,
           stock_reference: row.stock_reference || '',
           store_id: row.store_id || null,
         } as any;
@@ -398,6 +418,20 @@ export default function StockReferenceHistoryModule({ session }: { session: any 
   // Apply filters
   useEffect(() => {
     let filtered = additions;
+
+    // IMPORTANT: Override stale supplier names with cached values from stock reference details
+    // This ensures the main table always shows the most up-to-date supplier names
+    filtered = filtered.map((row) => {
+      const stockRef = String(row.stock_reference || '').trim();
+      const cachedSupplierName = stockRefSupplierNameByRef[stockRef];
+      if (cachedSupplierName && cachedSupplierName !== row.supplier_name) {
+        return {
+          ...row,
+          supplier_name: cachedSupplierName,
+        };
+      }
+      return row;
+    });
 
     // Search filter
     // Search across more fields so "Rechercher" behaves as expected.
@@ -568,7 +602,9 @@ export default function StockReferenceHistoryModule({ session }: { session: any 
       next[p.id] = {
         purchase_price: String(Number(p.purchase_price ?? 0) || 0),
         number_of_boxes: p.number_of_boxes === undefined || p.number_of_boxes === null ? '' : String(p.number_of_boxes),
-        supplier_id: p.supplier_id || '',
+        // IMPORTANT: Use the product's own supplier_id, not the stock reference's supplier_id
+        // This allows each product to have its own supplier when editing
+        supplier_id: String(p.supplier_id || '').trim(),
       };
     });
     setProductsDraftById(next);
@@ -808,8 +844,34 @@ export default function StockReferenceHistoryModule({ session }: { session: any 
                         const detailsData = await resp.json().catch(() => ({}));
                         setStockRefDetailsData(detailsData.details || stockRefDetailsDraft);
 
-                        // 2) Save products drafts (no per-row actions anymore)
-                        const updates = Object.entries(productsDraftById);
+                        // 2) If supplier changed at stock reference level, do a single aggregated update.
+                        // This moves the TOTAL of the achat from old supplier -> new supplier and updates all rows.
+                        const selectedSupplierId = String(stockRefDetailsDraft?.supplier_id || '').trim() || null;
+                        if (selectedSupplierId) {
+                          const bulkResp = await fetch(
+                            `https://${projectId}.supabase.co/functions/v1/super-handler/product-additions-history/by-stock-reference/${encodeURIComponent(selectedStockRef)}`,
+                            {
+                              method: 'PATCH',
+                              headers: {
+                                'Content-Type': 'application/json',
+                                'Authorization': `Bearer ${session?.access_token}`,
+                              },
+                              body: JSON.stringify({ supplier_id: selectedSupplierId }),
+                            }
+                          );
+
+                          if (!bulkResp.ok) {
+                            const t = await bulkResp.text().catch(() => '');
+                            console.error('Failed to bulk update supplier by stock_reference:', t);
+                            toast.error("Erreur lors de l'enregistrement (mise à jour fournisseur)");
+                            return;
+                          }
+                        }
+
+                        // 3) Save products drafts (per-row edits: purchase_price / quantite)
+                        // Snapshot drafts at click time to avoid any state mutation during the async loop.
+                        const draftsSnapshot = { ...productsDraftById };
+                        const updates = Object.entries(draftsSnapshot);
                         for (const [productId, draft] of updates) {
                           const pp = Number(String(draft.purchase_price || '').replace(',', '.'));
                           if (!Number.isFinite(pp) || pp < 0) {
@@ -834,30 +896,39 @@ export default function StockReferenceHistoryModule({ session }: { session: any 
                             return;
                           }
 
+                          // IMPORTANT:
+                          // This screen edits an EXISTING product (products.id = resolvedProductsId).
+                          // If we send stock_reference in the payload, the backend may treat it as a request
+                          // to create/attach a new product under that stock reference (depending on server logic).
+                          // So we explicitly avoid sending stock_reference here.
+                          // Update the immutable purchase/history row (product_additions_history),
+                          // NOT the live products table.
+                          // This matches the Supplier Details "Achat" tab which reads from product_additions_history.
                           const r = await fetch(
-                            `https://${projectId}.supabase.co/functions/v1/super-handler/products/${encodeURIComponent(resolvedProductsId)}`,
+                            `https://${projectId}.supabase.co/functions/v1/super-handler/product-additions-history/${encodeURIComponent(String(productId))}`,
                             {
-                              method: 'PUT',
+                              method: 'PATCH',
                               headers: {
                                 'Content-Type': 'application/json',
                                 'Authorization': `Bearer ${session?.access_token}`,
                               },
-                              body: JSON.stringify({
-                                // Some deployments require store_id for PUT /products/:id.
-                                // Use the store selected in the filter dropdown when provided.
-                                // Fallback to current user's store_id from auth metadata.
-                                // Last-resort fallback: use store_id from the history row.
-                                store_id: filterStore !== 'all'
-                                  ? String(filterStore)
-                                  : (
-                                    (session?.user?.user_metadata?.store_id ? String(session.user.user_metadata.store_id) : null) ||
-                                    String(resolvedProductRow?.store_id || '').trim() ||
-                                    null
-                                  ),
-                                purchase_price: pp,
-                                number_of_boxes: boxes,
-                                supplier_id: draft.supplier_id || null,
-                              }),
+                              body: (() => {
+                                const payload = {
+                                  purchase_price: pp,
+                                  quantite: boxes,
+                                  // IMPORTANT: in this screen, the supplier dropdown is per-stock-reference.
+                                  // The PATCH must use the selected supplier from the stock reference header,
+                                  // not the per-row draft (which can remain the old supplier).
+                                  supplier_id: String(stockRefDetailsDraft?.supplier_id || '').trim() || null,
+                                };
+                                console.log('[stock-reference-history] PATCH payload (header save)', {
+                                  history_row_id: productId,
+                                  payload,
+                                });
+                                const bodyString = JSON.stringify(payload);
+                                debugLogPatchRequest(String(productId), bodyString);
+                                return bodyString;
+                              })(),
                             }
                           );
 
@@ -884,8 +955,41 @@ export default function StockReferenceHistoryModule({ session }: { session: any 
                           }
                         }
 
+                        // Refresh history + stock ref details
                         await fetchProductAdditions();
                         await fetchStockRefDetails(selectedStockRef);
+
+                        // IMPORTANT:
+                        // This screen displays rows from product_additions_history (immutable snapshots).
+                        // Editing a product updates the `products` table, but does NOT rewrite old history rows.
+                        // So after saving, we must also update the local UI rows to reflect the new values.
+                        // We do this by patching the in-memory additions list for the edited products.
+                        setAdditions((prev) => {
+                          const next = prev.slice();
+                          for (const [historyRowId, draft] of Object.entries(productsDraftById)) {
+                            const resolvedProductRow: any = productsInRef.find((p: any) => String(p.id) === String(historyRowId));
+                            const pid = String(resolvedProductRow?.product_id || '').trim();
+                            if (!pid) continue;
+
+                            const pp = Number(String((draft as any).purchase_price || '').replace(',', '.'));
+                            const boxes = (draft as any).number_of_boxes === ''
+                              ? null
+                              : Number(String((draft as any).number_of_boxes || '').replace(',', '.'));
+
+                            for (let i = 0; i < next.length; i++) {
+                              const row: any = next[i];
+                              if (String(row?.product_id || '') !== pid) continue;
+                              next[i] = {
+                                ...row,
+                                purchase_price: Number.isFinite(pp) ? pp : row.purchase_price,
+                                number_of_boxes: (boxes === null || Number.isFinite(boxes)) ? boxes : row.number_of_boxes,
+                                supplier_id: (draft as any).supplier_id || null,
+                              };
+                            }
+                          }
+                          return next;
+                        });
+
                         setIsEditingStockRefDetails(false);
                         toast.success('Modifications enregistrées');
                       } catch (e) {
@@ -1266,13 +1370,22 @@ export default function StockReferenceHistoryModule({ session }: { session: any 
                           <div className="mt-2">
                             <select
                               value={productsDraftById[product.id]?.supplier_id || ''}
-                              onChange={(e) => setProductsDraftById(prev => ({
-                                ...prev,
-                                [product.id]: {
-                                  ...(prev[product.id] || { purchase_price: '0', number_of_boxes: '', supplier_id: '' }),
-                                  supplier_id: e.target.value,
-                                },
-                              }))}
+                              onChange={(e) => {
+                                const nextSupplierId = String(e.target.value || '').trim();
+                                console.log('[stock-reference-history] supplier dropdown change', {
+                                  history_row_id: product.id,
+                                  product_id: (product as any)?.product_id,
+                                  prev_supplier_id: productsDraftById[product.id]?.supplier_id,
+                                  next_supplier_id: nextSupplierId,
+                                });
+                                setProductsDraftById((prev) => ({
+                                  ...prev,
+                                  [product.id]: {
+                                    ...(prev[product.id] || { purchase_price: '0', number_of_boxes: '', supplier_id: '' }),
+                                    supplier_id: nextSupplierId,
+                                  },
+                                }));
+                              }}
                               className="w-full px-2 py-1 border border-gray-300 rounded-md text-xs"
                             >
                               <option value="">(Aucun fournisseur)</option>
@@ -1420,8 +1533,34 @@ export default function StockReferenceHistoryModule({ session }: { session: any 
                   const detailsData = await resp.json().catch(() => ({}));
                   setStockRefDetailsData(detailsData.details || stockRefDetailsDraft);
 
-                  // 2) Save products drafts
-                  const updates = Object.entries(productsDraftById);
+                  // 2) If supplier changed at stock reference level, do a single aggregated update.
+                  // This moves the TOTAL of the achat from old supplier -> new supplier and updates all rows.
+                  const selectedSupplierId = String(stockRefDetailsDraft?.supplier_id || '').trim() || null;
+                  if (selectedSupplierId) {
+                    const bulkResp = await fetch(
+                      `https://${projectId}.supabase.co/functions/v1/super-handler/product-additions-history/by-stock-reference/${encodeURIComponent(selectedStockRef)}`,
+                      {
+                        method: 'PATCH',
+                        headers: {
+                          'Content-Type': 'application/json',
+                          'Authorization': `Bearer ${session?.access_token}`,
+                        },
+                        body: JSON.stringify({ supplier_id: selectedSupplierId }),
+                      }
+                    );
+
+                    if (!bulkResp.ok) {
+                      const t = await bulkResp.text().catch(() => '');
+                      console.error('Failed to bulk update supplier by stock_reference:', t);
+                      toast.error("Erreur lors de l'enregistrement (mise à jour fournisseur)");
+                      return;
+                    }
+                  }
+
+                  // 3) Save products drafts (per-row edits: purchase_price / quantite)
+                  // Snapshot drafts at click time to avoid any state mutation during the async loop.
+                  const draftsSnapshot = { ...productsDraftById };
+                  const updates = Object.entries(draftsSnapshot);
                   for (const [productId, draft] of updates) {
                     const pp = Number(String(draft.purchase_price || '').replace(',', '.'));
                     if (!Number.isFinite(pp) || pp < 0) {
@@ -1446,30 +1585,36 @@ export default function StockReferenceHistoryModule({ session }: { session: any 
                       return;
                     }
 
+                    // IMPORTANT:
+                    // This screen edits an EXISTING product (products.id = resolvedProductsId).
+                    // If we send stock_reference in the payload, the backend may treat it as a request
+                    // to create/attach a new product under that stock reference (depending on server logic).
+                    // So we explicitly avoid sending stock_reference here.
+                    // Update the immutable purchase/history row (product_additions_history),
+                    // NOT the live products table.
+                    // This matches the Supplier Details "Achat" tab which reads from product_additions_history.
                     const r = await fetch(
-                      `https://${projectId}.supabase.co/functions/v1/super-handler/products/${encodeURIComponent(resolvedProductsId)}`,
+                      `https://${projectId}.supabase.co/functions/v1/super-handler/product-additions-history/${encodeURIComponent(String(productId))}`,
                       {
-                        method: 'PUT',
+                        method: 'PATCH',
                         headers: {
                           'Content-Type': 'application/json',
                           'Authorization': `Bearer ${session?.access_token}`,
                         },
-                        body: JSON.stringify({
-                          // Some deployments require store_id for PUT /products/:id.
-                          // Use the store selected in the filter dropdown when provided.
-                          // Fallback to current user's store_id from auth metadata.
-                          // Last-resort fallback: use store_id from the history row.
-                          store_id: filterStore !== 'all'
-                            ? String(filterStore)
-                            : (
-                              (session?.user?.user_metadata?.store_id ? String(session.user.user_metadata.store_id) : null) ||
-                              String(resolvedProductRow?.store_id || '').trim() ||
-                              null
-                            ),
-                          purchase_price: pp,
-                          number_of_boxes: boxes,
-                          supplier_id: draft.supplier_id || null,
-                        }),
+                        body: (() => {
+                          const payload = {
+                            purchase_price: pp,
+                            quantite: boxes,
+                            supplier_id: String(stockRefDetailsDraft?.supplier_id || '').trim() || null,
+                          };
+                          console.log('[stock-reference-history] PATCH payload (bottom save)', {
+                            history_row_id: productId,
+                            payload,
+                          });
+                          const bodyString = JSON.stringify(payload);
+                          debugLogPatchRequest(String(productId), bodyString);
+                          return bodyString;
+                        })(),
                       }
                     );
 
@@ -1492,8 +1637,41 @@ export default function StockReferenceHistoryModule({ session }: { session: any 
                     }
                   }
 
+                  // Refresh history + stock ref details
                   await fetchProductAdditions();
                   await fetchStockRefDetails(selectedStockRef);
+
+                  // IMPORTANT:
+                  // This screen displays rows from product_additions_history (immutable snapshots).
+                  // Editing a product updates the `products` table, but does NOT rewrite old history rows.
+                  // So after saving, we must also update the local UI rows to reflect the new values.
+                  // We do this by patching the in-memory additions list for the edited products.
+                  setAdditions((prev) => {
+                    const next = prev.slice();
+                    for (const [historyRowId, draft] of Object.entries(productsDraftById)) {
+                      const resolvedProductRow: any = productsInRef.find((p: any) => String(p.id) === String(historyRowId));
+                      const pid = String(resolvedProductRow?.product_id || '').trim();
+                      if (!pid) continue;
+
+                      const pp = Number(String((draft as any).purchase_price || '').replace(',', '.'));
+                      const boxes = (draft as any).number_of_boxes === ''
+                        ? null
+                        : Number(String((draft as any).number_of_boxes || '').replace(',', '.'));
+
+                      for (let i = 0; i < next.length; i++) {
+                        const row: any = next[i];
+                        if (String(row?.product_id || '') !== pid) continue;
+                        next[i] = {
+                          ...row,
+                          purchase_price: Number.isFinite(pp) ? pp : row.purchase_price,
+                          number_of_boxes: (boxes === null || Number.isFinite(boxes)) ? boxes : row.number_of_boxes,
+                          supplier_id: (draft as any).supplier_id || null,
+                        };
+                      }
+                    }
+                    return next;
+                  });
+
                   setIsEditingStockRefDetails(false);
                   toast.success('Modifications enregistrées');
                 } catch (e) {

@@ -1418,6 +1418,161 @@ async function handler(req: Request): Promise<Response> {
     });
   }
 
+  // PATCH /product-additions-history/by-stock-reference/:stock_reference
+  // Update ALL history rows for a stock_reference and move the aggregated "valeur total" between suppliers.
+  // This is the correct operation when the user changes the supplier at the stock reference level.
+  // It keeps suppliers.balance ("Total Facturé") consistent by moving the TOTAL of the achat.
+  if (path.startsWith("/product-additions-history/by-stock-reference/") && method === "PATCH") {
+    try {
+      const currentUser = await getCurrentUserWithRole(req);
+      if (!currentUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+
+      const role = String(currentUser.role || '').toLowerCase();
+      if (role !== 'admin') return jsonResponse({ error: 'Unauthorized' }, 403);
+
+      const stockRef = String(path.split('/')[3] || '').trim();
+      if (!stockRef) return jsonResponse({ error: 'stock_reference is required' }, 400);
+
+      const body = await req.json().catch(() => ({}));
+      const newSupplierId = body?.supplier_id ? String(body.supplier_id).trim() : null;
+      if (!newSupplierId) return jsonResponse({ error: 'supplier_id is required' }, 400);
+
+      // Load all history rows for this stock reference
+      const { data: rows, error: rowsErr } = await supabase
+        .from('product_additions_history')
+        .select('id, supplier_id, quantite, purchase_price')
+        .eq('stock_reference', stockRef)
+        .limit(10000);
+      if (rowsErr) throw rowsErr;
+
+      const list = (rows || []) as any[];
+      if (list.length === 0) return jsonResponse({ error: 'No history rows found for this stock_reference' }, 404);
+
+      // Determine old supplier (most frequent non-null supplier_id)
+      const counts = new Map<string, number>();
+      for (const r of list) {
+        const sid = r?.supplier_id ? String(r.supplier_id).trim() : '';
+        if (!sid) continue;
+        counts.set(sid, (counts.get(sid) || 0) + 1);
+      }
+      let oldSupplierId: string | null = null;
+      let best = -1;
+      for (const [sid, c] of counts.entries()) {
+        if (c > best) {
+          best = c;
+          oldSupplierId = sid;
+        }
+      }
+
+      // Compute total achat value: SUM(quantite * purchase_price)
+      const totalAchat = round2(
+        list.reduce((sum, r) => sum + (toNum(r?.quantite ?? 0) * toNum(r?.purchase_price ?? 0)), 0)
+      );
+
+      // 1) Update all history rows supplier_id
+      const { error: updErr } = await supabase
+        .from('product_additions_history')
+        .update({ supplier_id: newSupplierId })
+        .eq('stock_reference', stockRef);
+      if (updErr) throw updErr;
+
+      // 2) Move suppliers.balance (Total Facturé)
+      // Decrement old supplier, increment new supplier.
+      // If oldSupplierId is null (no supplier previously), we only increment new.
+      const adjustSupplierBalance = async (supplierId: string, delta: number) => {
+        const { data: sRow, error: sErr } = await supabase
+          .from('suppliers')
+          .select('id, balance')
+          .eq('id', supplierId)
+          .maybeSingle();
+        if (sErr) throw sErr;
+        if (!sRow?.id) throw new Error('Supplier not found: ' + supplierId);
+        const prev = toNum((sRow as any).balance ?? 0);
+        const next = round2(prev + delta);
+        const { error: uErr } = await supabase
+          .from('suppliers')
+          .update({ balance: next })
+          .eq('id', supplierId);
+        if (uErr) throw uErr;
+      };
+
+      if (oldSupplierId && oldSupplierId !== newSupplierId) {
+        await adjustSupplierBalance(oldSupplierId, -totalAchat);
+      }
+      await adjustSupplierBalance(newSupplierId, totalAchat);
+
+      return jsonResponse({
+        success: true,
+        stock_reference: stockRef,
+        old_supplier_id: oldSupplierId,
+        new_supplier_id: newSupplierId,
+        total_achat: totalAchat,
+      });
+    } catch (error: any) {
+      console.error('Error updating product additions history by stock_reference:', error);
+      return jsonResponse({ error: error.message || String(error) }, 500);
+    }
+  }
+
+  // PATCH /product-additions-history/:id
+  // Edit a single immutable history row (used by StockReferenceHistoryModule edits).
+  // This MUST NOT touch the live `products` table.
+  if (path.startsWith("/product-additions-history/") && method === "PATCH") {
+    try {
+      const currentUser = await getCurrentUserWithRole(req);
+      if (!currentUser) return jsonResponse({ error: 'Unauthorized' }, 401);
+
+      const role = String(currentUser.role || '').toLowerCase();
+      if (role !== 'admin') return jsonResponse({ error: 'Unauthorized' }, 403);
+
+      const id = String(path.split('/')[2] || '').trim();
+      if (!id) return jsonResponse({ error: 'id is required' }, 400);
+
+      const body = await req.json().catch(() => ({}));
+
+      // Load existing row
+      const { data: existing, error: exErr } = await supabase
+        .from('product_additions_history')
+        .select('*')
+        .eq('id', id)
+        .maybeSingle();
+      if (exErr) throw exErr;
+      if (!existing) return jsonResponse({ error: 'History row not found' }, 404);
+
+      // Some deployments of product_additions_history do not have updated_at.
+      // Avoid writing it to prevent schema-cache errors.
+      const patch: any = {};
+
+      if (body.purchase_price !== undefined) patch.purchase_price = toNum(body.purchase_price);
+      if (body.quantite !== undefined) patch.quantite = body.quantite === null ? null : toNum(body.quantite);
+      if (body.caisse !== undefined) patch.caisse = body.caisse === null ? null : toNum(body.caisse);
+      if (body.supplier_id !== undefined) patch.supplier_id = body.supplier_id ? String(body.supplier_id) : null;
+
+      // Recompute derived fields if possible
+      const nextCaisse = patch.caisse !== undefined ? toNum(patch.caisse) : toNum(existing.caisse ?? 0);
+      const nextQuantite = patch.quantite !== undefined ? toNum(patch.quantite) : toNum(existing.quantite ?? 0);
+      const nextPurchase = patch.purchase_price !== undefined ? toNum(patch.purchase_price) : toNum(existing.purchase_price ?? 0);
+
+      // moyenne = quantite / caisse (when caisse > 0)
+      patch.moyenne = nextCaisse > 0 ? round2(nextQuantite / nextCaisse) : 0;
+      // total_value = caisse * purchase_price
+      patch.total_value = round2(nextCaisse * nextPurchase);
+
+      const { data: updated, error: upErr } = await supabase
+        .from('product_additions_history')
+        .update(patch)
+        .eq('id', id)
+        .select('*')
+        .maybeSingle();
+      if (upErr) throw upErr;
+
+      return jsonResponse({ success: true, row: updated });
+    } catch (error: any) {
+      console.error('Error updating product additions history row:', error);
+      return jsonResponse({ error: error.message || String(error) }, 500);
+    }
+  }
+
   if (path === "/product-additions-history" && method === "GET") {
     try {
       const url = new URL(req.url);
@@ -7970,6 +8125,16 @@ if (!existingInv?.id) {
       // Sync sale_items if items were provided
       if (Array.isArray(body?.items)) {
       try {
+      // Load old items BEFORE overwrite so we can reconcile stock deltas.
+      const { data: oldItemsRows, error: oldItemsErr } = await supabase
+      .from('sale_items')
+      .select('product_id, caisse, quantity')
+      .eq('sale_id', saleId)
+      .limit(5000);
+      if (oldItemsErr) {
+      console.error('[sales PUT] failed to load old sale_items for stock reconciliation:', oldItemsErr);
+      }
+      
       const itemsToInsert = normalizeSaleItems(body.items).map((it: any) => ({
       sale_id: saleId,
       product_id: it?.product_id || null,
@@ -7988,6 +8153,96 @@ if (!existingInv?.id) {
       console.error('[sales PUT] sale_items insert failed:', insErr);
       }
       }
+      
+      // ===== Stock reconciliation on sale edit =====
+      // Only reconcile if stock was already applied for this sale (marker present).
+      // Otherwise, stock will be deducted later when payment becomes paid/partial.
+      try {
+      const stockAppliedMarker = 'stock_deducted=1';
+      const { data: saleRow, error: saleRowErr } = await supabase
+      .from('sales')
+      .select('id, store_id, notes, sale_number')
+      .eq('id', saleId)
+      .maybeSingle();
+      if (saleRowErr) throw saleRowErr;
+      
+      const saleNumber = String((saleRow as any)?.sale_number || '');
+      const isInternalDoc =
+      saleNumber.startsWith('TRANSFER-') ||
+      saleNumber.startsWith('PURCHASE-') ||
+      saleNumber.startsWith('TRANSFER-ADMIN-');
+      
+      const notes = String((saleRow as any)?.notes || '');
+      const storeId = (saleRow as any)?.store_id ? String((saleRow as any).store_id) : '';
+      
+      if (!isInternalDoc && storeId && notes.includes(stockAppliedMarker)) {
+      const { data: newItemsRows, error: newItemsErr } = await supabase
+      .from('sale_items')
+      .select('product_id, caisse, quantity')
+      .eq('sale_id', saleId)
+      .limit(5000);
+      if (newItemsErr) throw newItemsErr;
+      
+      const computeQty = (it: any) => {
+      const c = toNum(it?.caisse);
+      // For BL sales, stock decrement is driven by `caisse` ONLY.
+      // quantity is KG and must NOT affect store stock.
+      return Number.isFinite(c) ? c : 0;
+      };
+      
+      const oldByProduct = new Map<string, number>();
+      (oldItemsRows || []).forEach((it: any) => {
+      const pid = it?.product_id ? String(it.product_id) : '';
+      if (!pid) return;
+      oldByProduct.set(pid, (oldByProduct.get(pid) || 0) + computeQty(it));
+      });
+      
+      const newByProduct = new Map<string, number>();
+      (newItemsRows || []).forEach((it: any) => {
+      const pid = it?.product_id ? String(it.product_id) : '';
+      if (!pid) return;
+      newByProduct.set(pid, (newByProduct.get(pid) || 0) + computeQty(it));
+      });
+      
+      const productIds = Array.from(new Set([...oldByProduct.keys(), ...newByProduct.keys()]));
+      for (const pid of productIds) {
+      const oldQty = round2(toNum(oldByProduct.get(pid) || 0));
+      const newQty = round2(toNum(newByProduct.get(pid) || 0));
+      const delta = round2(newQty - oldQty);
+      if (delta === 0) continue;
+      
+      const { data: ss, error: ssErr } = await supabase
+      .from('store_stocks')
+      .select('id, quantity')
+      .eq('store_id', storeId)
+      .eq('product_id', pid)
+      .maybeSingle();
+      
+      if (ssErr && (ssErr as any).code !== 'PGRST116') throw ssErr;
+      
+      const prev = toNum((ss as any)?.quantity ?? 0);
+      const next = Math.max(0, round2(prev - delta));
+      
+      if ((ss as any)?.id) {
+      const { error: uErr } = await supabase
+      .from('store_stocks')
+      .update({ quantity: next })
+      .eq('id', (ss as any).id);
+      if (uErr) throw uErr;
+      } else {
+      const { error: iErr } = await supabase
+      .from('store_stocks')
+      .insert([{ store_id: storeId, product_id: pid, quantity: next }]);
+      if (iErr) throw iErr;
+      }
+      
+      console.log('[sales PUT] stock reconciled after edit', { saleId, storeId, productId: pid, oldQty, newQty, delta, prev, next });
+      }
+      }
+      } catch (e) {
+      console.error('[sales PUT] stock reconciliation failed:', e);
+      }
+      
       } catch (e) {
       console.error('[sales PUT] sale_items sync failed:', e);
       }

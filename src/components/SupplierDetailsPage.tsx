@@ -96,6 +96,17 @@ export function SupplierDetailsPage({ supplier, session, onBack }: SupplierDetai
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [supplier?.id]);
 
+  // Keep the "Achat" table fresh when the user returns to this page.
+  // product_additions_history can be edited from StockReferenceHistoryModule.
+  useEffect(() => {
+    const onFocus = () => {
+      fetchSupplierProducts();
+    };
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [supplier?.id]);
+
   const fetchStockRefDetails = async (stockRef: string) => {
     const ref = String(stockRef || '').trim();
     if (!ref) {
@@ -883,6 +894,18 @@ export function SupplierDetailsPage({ supplier, session, onBack }: SupplierDetai
     });
   }, [productsSearch, supplierProducts]);
 
+  // In the UI, "Stock Achat" should count achats (stock_reference groups), not product lines.
+  const filteredSupplierAchats = useMemo(() => {
+    const map = new Map<string, any[]>();
+    (filteredSupplierProducts || []).forEach((row: any) => {
+      const key = String(row?.stock_reference || '').trim();
+      if (!key) return;
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push(row);
+    });
+    return Array.from(map.entries()).map(([stock_reference, rows]) => ({ stock_reference, rows }));
+  }, [filteredSupplierProducts]);
+
   const filteredSupplierPayments = useMemo(() => {
     const q = paymentsSearch.trim().toLowerCase();
 
@@ -1200,47 +1223,81 @@ export function SupplierDetailsPage({ supplier, session, onBack }: SupplierDetai
       });
     });
 
-    // Achat (Stock Achat tab): export EXACTLY what is displayed in the UI.
-    // IMPORTANT FIX:
-    // - We no longer group by stock_reference.
-    // - Each history row is exported as its own "Achat" line, even if reference/stock_reference repeats.
+    // Achat (Stock Achat tab): export grouped by stock_reference (achat), not by each product line.
+    // The report should show ONE line per stock_reference with summed quantity and value.
     try {
+      const groups = new Map<string, { rawDate: any; qty: number; val: number; actor: string; notes: string }>();
+
+      const getQty = (row: any) => {
+        return (
+          Number(
+            row?.quantite ??
+            row?.number_of_boxes ??
+            row?.caisse ??
+            row?.quantity_available ??
+            row?.quantity ??
+            row?.qty ??
+            0
+          ) || 0
+        );
+      };
+
+      const getUnit = (row: any) => {
+        return (
+          Number(
+            row?.purchase_price ??
+            row?.buy_price ??
+            row?.unit_price ??
+            row?.price ??
+            0
+          ) || 0
+        );
+      };
+
       (filteredSupplierProducts || []).forEach((row: any, idx: number) => {
+        const stockRef = String(row?.stock_reference || row?.stockRef || row?.reference || row?.id || idx).trim() || '-';
         const rawDate = row?.created_at || null;
+        const qty = getQty(row);
+        const unit = getUnit(row);
+        const val = qty * unit;
 
-        const qty = Number(
-          row?.quantite ??
-          row?.number_of_boxes ??
-          row?.caisse ??
-          row?.quantity_available ??
-          row?.quantity ??
-          row?.qty ??
-          0
-        ) || 0;
+        const prev = groups.get(stockRef);
+        if (!prev) {
+          groups.set(stockRef, {
+            rawDate,
+            qty,
+            val,
+            actor: row?.created_by_email || row?.created_by || '-',
+            notes: String(row?.notes || row?.reason || '').trim(),
+          });
+          return;
+        }
 
-        const unit = Number(
-          row?.purchase_price ??
-          row?.buy_price ??
-          row?.unit_price ??
-          row?.price ??
-          0
-        ) || 0;
+        // Keep earliest date for sorting (so the achat appears at its start time)
+        const prevT = prev.rawDate ? new Date(prev.rawDate).getTime() : 0;
+        const curT = rawDate ? new Date(rawDate).getTime() : 0;
+        const earliest = prevT && curT ? (curT < prevT ? rawDate : prev.rawDate) : (prev.rawDate || rawDate);
 
-        const total = qty * unit;
+        groups.set(stockRef, {
+          rawDate: earliest,
+          qty: prev.qty + qty,
+          val: prev.val + val,
+          actor: prev.actor || (row?.created_by_email || row?.created_by || '-'),
+          notes: prev.notes || String(row?.notes || row?.reason || '').trim(),
+        });
+      });
 
-        const ref = String(row?.stock_reference || row?.reference || row?.id || idx).trim() || '-';
-        const notes = String(row?.notes || row?.reason || '').trim();
-
+      Array.from(groups.entries()).forEach(([stockRef, g]) => {
         rows.push({
           _type: 'Achat',
-          _sort: sortTime(rawDate),
-          _dateStr: fmtDateTime(rawDate),
-          _amount: total,
+          _sort: sortTime(g.rawDate),
+          _dateStr: fmtDateTime(g.rawDate),
+          _amount: g.val,
           _method: 'STOCK',
-          _reference: ref,
+          _reference: stockRef,
           _coffer: '-',
-          _actor: row?.created_by_email || row?.created_by || '-',
-          _notes: notes || `Ajout stock (${ref})`,
+          _actor: g.actor || '-',
+          _notes: g.notes || `Achat stock (${stockRef})`,
           _remise: 0,
         });
       });
@@ -1995,7 +2052,7 @@ export function SupplierDetailsPage({ supplier, session, onBack }: SupplierDetai
             aria-pressed={activeTab === 'stock'}
           >
             <span className="text-xs font-medium">Stock Achat</span>
-            <span className="text-lg font-bold">{filteredSupplierProducts.length}</span>
+            <span className="text-lg font-bold">{filteredSupplierAchats.length}</span>
           </button>
 
           <button
@@ -2034,7 +2091,7 @@ export function SupplierDetailsPage({ supplier, session, onBack }: SupplierDetai
         {activeTab === 'stock' && (
           <Card>
             <CardHeader>
-              <CardTitle>Achat ({filteredSupplierProducts.length})</CardTitle>
+              <CardTitle>Achat ({filteredSupplierAchats.length})</CardTitle>
             </CardHeader>
             <CardContent>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
@@ -2047,9 +2104,9 @@ export function SupplierDetailsPage({ supplier, session, onBack }: SupplierDetai
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label>Total produits</Label>
-                  <div className="text-2xl font-bold text-green-700">{filteredSupplierProducts.length}</div>
-                  <p className="text-xs text-gray-500">Produits entrés sous ce fournisseur</p>
+                  <Label>Total achats</Label>
+                  <div className="text-2xl font-bold text-green-700">{filteredSupplierAchats.length}</div>
+                  <p className="text-xs text-gray-500">Références de stock (achats) sous ce fournisseur</p>
                 </div>
               </div>
 
@@ -2116,18 +2173,18 @@ export function SupplierDetailsPage({ supplier, session, onBack }: SupplierDetai
                       ) || 0;
                       
                       const price = Number(
-                      product.purchase_price ??
                       product.unit_price ??
                       product.unitPrice ??
+                      product.purchase_price ??
                       product.price ??
                       product.sale_price ??
                       0
                       ) || 0;
                       
                       acc[groupKey].total_quantity += qty;
-                      // Prefer immutable history precomputed total_value when available.
-                      const rowTotalValue = Number((product as any).total_value ?? (product as any).totalValue ?? 0) || 0;
-                      acc[groupKey].total_value += (rowTotalValue > 0 ? rowTotalValue : (qty * price));
+                      // Always recalculate total_value from quantity * unit_price
+                      // Do NOT use precomputed total_value as it may be incorrect
+                      acc[groupKey].total_value += (qty * price);
                       acc[groupKey].product_count += 1;
                       return acc;
                       }, {});
@@ -2538,6 +2595,24 @@ export function SupplierDetailsPage({ supplier, session, onBack }: SupplierDetai
                 const totalVal = productsInRef.reduce((sum, p) => sum + getRowValeurTotale(p), 0);
                 const avgPrice = totalQty > 0 ? (totalVal / totalQty) : 0;
 
+                // Extra charges (frais) from stock reference details must be included in the TOTAL GÉNÉRAL.
+                // These are achat-level charges, not per-product, so we add them once.
+                const toNum = (v: any) => {
+                  const n = Number(String(v ?? '').replace(',', '.'));
+                  return Number.isFinite(n) ? n : 0;
+                };
+
+                const totalFrais =
+                  toNum(stockRefDetailsData?.frais_maritime) +
+                  toNum(stockRefDetailsData?.frais_transit) +
+                  toNum(stockRefDetailsData?.onssa) +
+                  toNum(stockRefDetailsData?.frais_divers) +
+                  toNum(stockRefDetailsData?.frais_transport) +
+                  toNum(stockRefDetailsData?.magasinage) +
+                  toNum(stockRefDetailsData?.taxe);
+
+                const totalGeneral = totalVal + totalFrais;
+
                 return (
                   <div className="space-y-6">
                     
@@ -2787,9 +2862,10 @@ export function SupplierDetailsPage({ supplier, session, onBack }: SupplierDetai
                     <div className="flex items-center justify-end">
                       <div className="bg-gray-50 border rounded-lg px-4 py-3 text-right min-w-[260px]">
                         <div className="text-sm text-gray-600">TOTAL GÉNÉRAL</div>
-                        <div className="text-xl font-bold text-gray-900">{(Number(totalVal) || 0).toFixed(2)} MAD</div>
+                        <div className="text-xl font-bold text-gray-900">{(Number(totalGeneral) || 0).toFixed(2)} MAD</div>
                         <div className="text-xs text-gray-500 mt-1">
                           Quantité: {(Number(totalQty) || 0).toFixed(2)} • Prix moyen: {(Number(avgPrice) || 0).toFixed(2)}
+                          {totalFrais > 0 ? ` • Frais: ${totalFrais.toFixed(2)}` : ''}
                         </div>
                       </div>
                     </div>
