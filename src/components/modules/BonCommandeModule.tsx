@@ -519,6 +519,19 @@ export default function BonCommandeModule({ session, onBack, sale, adminSelected
         
         // Populate client info from sale
         setSelectedClientId(sale.client_id ?? null);
+        
+        // Determine payment status from sale
+        const saleStatus = sale.payment_status || sale.status || 'pending';
+        let displayStatus: 'Payée' | 'Non Payée' | 'Partiellement payée' = 'Non Payée';
+        if (saleStatus === 'paid') {
+          displayStatus = 'Payée';
+        } else if (saleStatus === 'partial') {
+          displayStatus = 'Partiellement payée';
+        }
+        
+        // Determine payment method
+        const salePaymentMethod = sale.payment_method || 'cash';
+        
         setOrderData(prevData => {
           const newData = {
             ...prevData,
@@ -533,6 +546,14 @@ export default function BonCommandeModule({ session, onBack, sale, adminSelected
             },
             // Populate items from either sale_items or items
             items: mappedItems,
+            // Populate payment-related fields
+            status: displayStatus,
+            paymentMethod: salePaymentMethod,
+            amountPaid: Number(sale.amount_paid || 0),
+            remiseAmount: Number(sale.total_remise || sale.totalRemise || 0),
+            // Populate dates
+            invoiceDate: sale.invoice_date || sale.invoiceDate || new Date().toISOString().split('T')[0],
+            executionDate: sale.execution_date || sale.executionDate || new Date().toISOString().split('T')[0],
           };
           console.log('New order data:', JSON.stringify(newData, null, 2));
           return newData;
@@ -897,9 +918,10 @@ export default function BonCommandeModule({ session, onBack, sale, adminSelected
             // Transform items to match backend expectations
             const transformedItems = orderData.items.map(item => ({
               // Keep `id` as the client-side line id, but ALWAYS include a real product UUID.
+              // If product_id is missing, use id as fallback
               id: item.id,
-              product_id: item.product_id,
-              productId: item.product_id,
+              product_id: item.product_id || item.id,
+              productId: item.product_id || item.id,
               name: item.description,
               quantity: item.quantity,
               caisse: item.caisse,
@@ -947,7 +969,7 @@ export default function BonCommandeModule({ session, onBack, sale, adminSelected
             client_ice: orderData.client.ice,
             payment_method: orderData.paymentMethod,
             bank_transfer_proof_url: uploadedProofUrl || bankProofUrl || undefined,
-            // IMPORTANT: totals.subtotal is the amount BEFORE remise.
+            // Backend computes total_amount from items, so we send subtotal
             total_amount: totals.subtotal,
             // Persist remise amount on the sale so BL history & reports can show it.
             // Backend canonical field: total_remise
@@ -972,8 +994,13 @@ export default function BonCommandeModule({ session, onBack, sale, adminSelected
             console.log('=== END FRONTEND SALE CREATION ===');
 
             // Frontend validation: block if any line doesn't have a selected product UUID.
+            // Accept either product_id or id as the product identifier
             const missingProduct = (transformedItems || [])
-              .map((it: any, idx: number) => ({ idx, product_id: String(it?.product_id || '').trim(), name: it?.name }))
+              .map((it: any, idx: number) => ({ 
+                idx, 
+                product_id: String(it?.product_id || it?.id || '').trim(), 
+                name: it?.name 
+              }))
               .filter((x: any) => !x.product_id);
             if (missingProduct.length > 0) {
               console.error('[BonCommandeModule] Blocking sale: missing product_id on items', missingProduct);
@@ -2044,9 +2071,10 @@ export default function BonCommandeModule({ session, onBack, sale, adminSelected
                       // Transform items to match backend expectations
                       const transformedItems = orderData.items.map(item => ({
                         // Keep `id` as the client-side line id. product_id must be a real product UUID.
+                        // If product_id is missing, use id as fallback
                         id: item.id,
-                        product_id: item.product_id,
-                        productId: item.product_id,
+                        product_id: item.product_id || item.id,
+                        productId: item.product_id || item.id,
                         name: item.description,
                         quantity: item.quantity,
                         unitPrice: item.unitPrice,
@@ -2065,8 +2093,13 @@ export default function BonCommandeModule({ session, onBack, sale, adminSelected
                       console.log('Items count:', transformedItems.length);
 
                       // Frontend validation: block if any line doesn't have a selected product UUID.
+                      // Accept either product_id or id as the product identifier
                       const missingProduct = (transformedItems || [])
-                        .map((it: any, idx: number) => ({ idx, product_id: String(it?.product_id || '').trim(), name: it?.name }))
+                        .map((it: any, idx: number) => ({ 
+                          idx, 
+                          product_id: String(it?.product_id || it?.id || '').trim(), 
+                          name: it?.name 
+                        }))
                         .filter((x: any) => !x.product_id);
                       if (missingProduct.length > 0) {
                         console.error('[BonCommandeModule] Blocking sale confirmation: missing product_id on items', missingProduct);
@@ -2118,7 +2151,7 @@ export default function BonCommandeModule({ session, onBack, sale, adminSelected
                       client_ice: orderData.client.ice,
                       payment_method: orderData.paymentMethod,
                       bank_transfer_proof_url: bankProofUrl || undefined,
-                      // IMPORTANT: totals.subtotal is the amount BEFORE remise.
+                      // Backend computes total_amount from items, so we send subtotal
                       total_amount: totals.subtotal,
                       // Persist remise amount on the sale so BL history & reports can show it.
                       // Backend canonical field: total_remise
@@ -2126,7 +2159,8 @@ export default function BonCommandeModule({ session, onBack, sale, adminSelected
                       // Backward-compat alias (some code paths used camelCase previously)
                       totalRemise: Math.max(0, Number(orderData.remiseAmount || 0) || 0),
                       amount_paid: (orderData.paymentMethod === 'cash' || orderData.paymentMethod === 'bank_transfer') ? (orderData.amountPaid || 0) : 0,
-                      remaining_balance: (orderData.paymentMethod === 'cash' || orderData.paymentMethod === 'bank_transfer') ? Math.max(0, totals.subtotal - (orderData.amountPaid || 0)) : totals.subtotal,
+                      // remaining_balance is calculated from totals.total (after remise) on backend
+                      remaining_balance: (orderData.paymentMethod === 'cash' || orderData.paymentMethod === 'bank_transfer') ? Math.max(0, totals.total - (orderData.amountPaid || 0)) : totals.total,
                       tva_percentage: 0,
                       status: orderData.status === 'Payée' ? 'paid' : 'pending',
                       invoice_date: orderData.invoiceDate,

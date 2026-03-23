@@ -443,6 +443,7 @@ async function handler(req: Request): Promise<Response> {
             supplier_id: supplierId,
             amount,
             payment_method: paymentMethod,
+            payment_date: body.payment_date ? String(body.payment_date) : null,
             reference_number: referenceNumber,
             notes: body.notes || null,
             created_by: currentUser?.id || null,
@@ -486,6 +487,7 @@ async function handler(req: Request): Promise<Response> {
       };
 
       const expenseRow: any = {
+        created_at: body.payment_date ? String(body.payment_date) : undefined,
         store_id: storeId,
         coffer_id: cofferId,
         // Coffre supplier payments are OUTFLOWS and must REDUCE coffre totals.
@@ -495,6 +497,7 @@ async function handler(req: Request): Promise<Response> {
         // Prefer `reason` (exists in older migrations) and keep notes for traceability.
         reason: `Paiement Fournisseur (${paymentMethod})`,
         notes: expenseNotes,
+        payment_date: body.payment_date ? String(body.payment_date) : null,
         created_by: currentUser?.id || null,
       };
 
@@ -5152,6 +5155,7 @@ async function handler(req: Request): Promise<Response> {
         bank_transfer_reference: body.bank_transfer_reference || null,
         bank_transfer_date: body.bank_transfer_date || null,
         notes: body.notes || null,
+        payment_date: body.payment_date || null,
         created_by: currentUser.id,
         created_by_email: currentUser.email,
         created_by_role: currentUser.role,
@@ -5215,6 +5219,8 @@ async function handler(req: Request): Promise<Response> {
       amount: -Math.abs(amount),
       expense_type: paymentMethod === 'cash' ? 'coffer_out_cash' : 'coffer_out_bank_transfer',
       reason: `Avance Fournisseur • ${supplierName}`,
+      payment_date: body.payment_date || null,
+      created_at: body.payment_date || undefined,
       created_by: currentUser.id,
       };
       
@@ -5241,6 +5247,196 @@ async function handler(req: Request): Promise<Response> {
       return jsonResponse({ error: error.message }, 500);
       }
       }
+
+  // ===== Supplier Advances Correction =====
+  // POST /supplier-advances/:id/correct
+  // Corrects the amount of an existing supplier advance
+  if (path.startsWith("/supplier-advances/") && path.endsWith("/correct") && method === "POST") {
+    try {
+      const advanceId = path.split("/")[2];
+      if (!advanceId) {
+        return jsonResponse({ error: "Advance ID is required" }, 400);
+      }
+
+      const body = await req.json().catch(() => ({}));
+      const currentUser = await getCurrentUserWithRole(req);
+      if (!currentUser) return jsonResponse({ error: "Unauthorized" }, 401);
+
+      const newAmount = Number(body.new_amount);
+      const oldAmountFromFrontend = Number(body.old_amount);
+      if (!Number.isFinite(newAmount) || newAmount < 0) {
+        return jsonResponse({ error: "new_amount must be >= 0" }, 400);
+      }
+
+      const reason = String(body.reason || "").trim() || "Correction avance";
+
+      // Get the existing advance
+      const { data: existingAdvance, error: fetchErr } = await supabase
+        .from("supplier_advances")
+        .select("*")
+        .eq("id", advanceId)
+        .maybeSingle();
+
+      if (fetchErr) throw fetchErr;
+      if (!existingAdvance) {
+        return jsonResponse({ error: "Advance not found" }, 404);
+      }
+
+      const currentAmount = Number(existingAdvance.amount || 0);
+      
+      // Validate old_amount if provided from frontend (prevents double-submit issues)
+      if (Number.isFinite(oldAmountFromFrontend) && oldAmountFromFrontend !== currentAmount) {
+        return jsonResponse({ 
+          error: "Le montant a été modifié par une autre action. Veuillez rafraîchir les données.",
+          code: "AMOUNT_MISMATCH",
+          currentAmount: currentAmount
+        }, 409);
+      }
+
+      // Extract the TRUE original amount from notes if this was previously corrected
+      // Notes format: "Correction reason | Ancien: X | Nouveau: Y"
+      let originalAmount = currentAmount;
+      const existingNotes = String(existingAdvance.notes || "");
+      
+      if (existingNotes.includes("Ancien:") && existingNotes.includes("Nouveau:")) {
+        // Try to extract the original amount (first "Ancien:" value before any corrections)
+        const ancienMatch = existingNotes.match(/Ancien:\s*([0-9.,]+)/);
+        if (ancienMatch && ancienMatch[1]) {
+          const parsedOriginal = Number(String(ancienMatch[1]).replace(',', '.'));
+          if (Number.isFinite(parsedOriginal) && parsedOriginal > 0) {
+            originalAmount = parsedOriginal;
+          }
+        }
+      }
+
+      const amountDiff = newAmount - currentAmount;
+
+      // Update the advance amount
+      const { error: updateErr } = await supabase
+        .from("supplier_advances")
+        .update({
+          amount: newAmount,
+          notes: `${reason} | Ancien: ${originalAmount} | Nouveau: ${newAmount}`,
+        })
+        .eq("id", advanceId);
+
+      if (updateErr) throw updateErr;
+
+      // Note: Advance corrections only affect Total Paid, not Total Facturé
+      // The remaining balance will be recalculated automatically based on advances
+
+      return jsonResponse({ success: true, message: "Advance corrected successfully", oldAmount: originalAmount, newAmount });
+    } catch (error: any) {
+      console.error("Error correcting advance:", error);
+      return jsonResponse({ error: error.message }, 500);
+    }
+  }
+
+  // ===== Admin Supplier Invoice Correction =====
+  // POST /supplier-admin-invoices/:id/correct
+  // Corrects the amount of an existing supplier admin invoice
+  if (path.startsWith("/supplier-admin-invoices/") && path.endsWith("/correct") && method === "POST") {
+    try {
+      const invoiceId = path.split("/")[2];
+      if (!invoiceId) {
+        return jsonResponse({ error: "Invoice ID is required" }, 400);
+      }
+
+      const body = await req.json().catch(() => ({}));
+      const currentUser = await getCurrentUserWithRole(req);
+      if (!currentUser) return jsonResponse({ error: "Unauthorized" }, 401);
+
+      const newAmount = Number(body.new_amount);
+      const oldAmountFromFrontend = Number(body.old_amount);
+      if (!Number.isFinite(newAmount) || newAmount < 0) {
+        return jsonResponse({ error: "new_amount must be >= 0" }, 400);
+      }
+
+      const reason = String(body.reason || "").trim() || "Correction facture";
+
+      // Get the existing invoice
+      const { data: existingInvoice, error: fetchErr } = await supabase
+        .from("admin_supplier_invoices")
+        .select("*")
+        .eq("id", invoiceId)
+        .maybeSingle();
+
+      if (fetchErr) throw fetchErr;
+      if (!existingInvoice) {
+        return jsonResponse({ error: "Invoice not found" }, 404);
+      }
+
+      const currentAmount = Number(existingInvoice.total_amount || 0);
+      
+      // Validate old_amount if provided from frontend (prevents double-submit issues)
+      if (Number.isFinite(oldAmountFromFrontend) && oldAmountFromFrontend !== currentAmount) {
+        return jsonResponse({ 
+          error: "Le montant a été modifié par une autre action. Veuillez rafraîchir les données.",
+          code: "AMOUNT_MISMATCH",
+          currentAmount: currentAmount
+        }, 409);
+      }
+
+      // Extract the TRUE original amount from notes if this was previously corrected
+      // Notes format: "Correction reason | Ancien: X | Nouveau: Y"
+      let originalAmount = currentAmount;
+      const existingNotes = String(existingInvoice.notes || "");
+      
+      if (existingNotes.includes("Ancien:") && existingNotes.includes("Nouveau:")) {
+        // Try to extract the original amount (first "Ancien:" value before any corrections)
+        const ancienMatch = existingNotes.match(/Ancien:\s*([0-9.,]+)/);
+        if (ancienMatch && ancienMatch[1]) {
+          const parsedOriginal = Number(String(ancienMatch[1]).replace(',', '.'));
+          if (Number.isFinite(parsedOriginal) && parsedOriginal > 0) {
+            originalAmount = parsedOriginal;
+          }
+        }
+      }
+
+      const amountDiff = newAmount - currentAmount;
+
+      // Update the invoice amount
+      const { error: updateErr } = await supabase
+        .from("admin_supplier_invoices")
+        .update({
+          total_amount: newAmount,
+          notes: `${reason} | Ancien: ${originalAmount} | Nouveau: ${newAmount}`,
+        })
+        .eq("id", invoiceId);
+
+      if (updateErr) throw updateErr;
+
+      // Update supplier balance if there's a difference
+      if (amountDiff !== 0 && existingInvoice.supplier_id) {
+        const { data: supplier } = await supabase
+          .from("suppliers")
+          .select("balance")
+          .eq("id", existingInvoice.supplier_id)
+          .maybeSingle();
+
+        if (supplier) {
+          const newBalance = Number(supplier.balance || 0) + amountDiff;
+          await supabase
+            .from("suppliers")
+            .update({ balance: newBalance })
+            .eq("id", existingInvoice.supplier_id);
+        }
+      }
+
+      // Also update the linked sale if exists
+      if (existingInvoice.sale_id) {
+        await supabase
+          .from("sales")
+          .update({ total_amount: newAmount })
+          .eq("id", existingInvoice.sale_id);
+      }
+
+      return jsonResponse({ success: true, message: "Invoice corrected successfully", oldAmount: originalAmount, newAmount });
+    } catch (error: any) {
+      console.error("Error correcting invoice:", error);
+      return jsonResponse({ error: error.message }, 500);
+    }
+  }
 
   // ===== Discounts =====
   // GET  /discounts
@@ -8056,39 +8252,40 @@ if (!existingInv?.id) {
       };
       
       const normalizeSaleItems = (raw: any): any[] => {
-      const arr = Array.isArray(raw) ? raw : [];
-      return arr.map((it: any) => {
-      const quantity = parseNum(it?.quantity);
-      const caisse = (it?.caisse === null || it?.caisse === undefined || it?.caisse === '')
-      ? null
-      : parseNum(it?.caisse);
-      
-      // Frontend can send `unitPrice` or `unit_price`
-      const unit_price = it?.unit_price !== undefined ? parseNum(it.unit_price) : parseNum(it?.unitPrice);
-      
-      const effectiveQty = (caisse !== null && caisse !== 0) ? caisse : quantity;
-      const subtotal = effectiveQty * unit_price;
-      
-      return {
-      ...it,
-      quantity,
-      caisse,
-      unit_price,
-      subtotal,
-      };
-      });
-      };
+        const arr = Array.isArray(raw) ? raw : [];
+        return arr.map((it: any) => {
+          const quantity = parseNum(it?.quantity);
+          const caisse = (it?.caisse === null || it?.caisse === undefined || it?.caisse === '')
+          ? null
+          : parseNum(it?.caisse);
+          
+          // Frontend can send `unitPrice` or `unit_price`
+          const unit_price = it?.unit_price !== undefined ? parseNum(it.unit_price) : parseNum(it?.unitPrice);
+          
+          // For subtotal calculation, use quantity (not caisse)
+          const subtotal = quantity * unit_price;
+          
+          return {
+            ...it,
+            quantity,
+            caisse,
+            unit_price,
+            subtotal,
+          };
+        });
+        };
       
       const computeItemsTotal = (items: any[]) => {
       return (items || []).reduce((sum: number, it: any) => sum + (parseNum(it?.subtotal) || 0), 0);
       };
       
       if (Array.isArray(body?.items)) {
-      const normItems = normalizeSaleItems(body.items);
-      body.items = normItems;
-      
-      const computedTotal = computeItemsTotal(normItems);
-      updateData.total_amount = Number(computedTotal.toFixed(2));
+        const normItems = normalizeSaleItems(body.items);
+        body.items = normItems;
+        
+        // Compute total from items (subtotal before remise)
+        const computedTotal = computeItemsTotal(normItems);
+        updateData.total_amount = Number(computedTotal.toFixed(2));
       
       // Keep remaining_balance coherent if amount_paid provided
       if (body.amount_paid !== undefined) {
@@ -9197,11 +9394,13 @@ if (!existingInv?.id) {
               : 'coffer_out_cash';
 
           const exp: any = {
+            created_at: body.payment_date ? String(body.payment_date) : undefined,
             store_id: resolvedStoreId,
             coffer_id: cofferId,
             amount: -Math.abs(amount),
             expense_type: expenseType,
             reason: `Paiement Fournisseur • ${supplierName}`,
+            payment_date: body.payment_date ? String(body.payment_date) : null,
             created_by: currentUser.id,
           };
 
@@ -9316,6 +9515,98 @@ if (!existingInv?.id) {
   return jsonResponse({
   error: "Legacy /payments POST handler is disabled. Use the main /payments handler earlier in this file.",
   }, 409);
+  }
+
+  // ===== Payment Correction =====
+  // POST /payments/:id/correct
+  // Corrects the amount of an existing payment (annulation + nouveau paiement - audit-safe)
+  if (path.startsWith("/payments/") && path.endsWith("/correct") && method === "POST") {
+    try {
+      const paymentId = path.split("/")[2];
+      if (!paymentId) {
+        return jsonResponse({ error: "Payment ID is required" }, 400);
+      }
+
+      const body = await req.json().catch(() => ({}));
+      const currentUser = await getCurrentUserWithRole(req);
+      if (!currentUser) return jsonResponse({ error: "Unauthorized" }, 401);
+
+      const newAmount = Number(body.new_amount);
+      const oldAmountFromFrontend = Number(body.old_amount);
+      if (!Number.isFinite(newAmount) || newAmount <= 0) {
+        return jsonResponse({ error: "new_amount must be > 0" }, 400);
+      }
+
+      const reason = String(body.reason || "").trim() || "Correction paiement";
+
+      // Get the existing payment
+      const { data: existingPayment, error: fetchErr } = await supabase
+        .from("payments")
+        .select("*")
+        .eq("id", paymentId)
+        .maybeSingle();
+
+      if (fetchErr) throw fetchErr;
+      if (!existingPayment) {
+        return jsonResponse({ error: "Payment not found" }, 404);
+      }
+
+      const currentAmount = Number(existingPayment.amount || 0);
+      
+      // Validate old_amount if provided from frontend (prevents double-submit issues)
+      if (Number.isFinite(oldAmountFromFrontend) && oldAmountFromFrontend !== currentAmount) {
+        return jsonResponse({ 
+          error: "Le montant a été modifié par une autre action. Veuillez rafraîchir les données.",
+          code: "AMOUNT_MISMATCH",
+          currentAmount: currentAmount
+        }, 409);
+      }
+
+      // Extract the TRUE original amount from notes if this was previously corrected
+      // Notes format: "Correction reason | Ancien: X | Nouveau: Y"
+      let originalAmount = currentAmount;
+      const existingNotes = String(existingPayment.notes || "");
+      
+      if (existingNotes.includes("Ancien:") && existingNotes.includes("Nouveau:")) {
+        // Try to extract the original amount (first "Ancien:" value before any corrections)
+        const ancienMatch = existingNotes.match(/Ancien:\s*([0-9.,]+)/);
+        if (ancienMatch && ancienMatch[1]) {
+          const parsedOriginal = Number(String(ancienMatch[1]).replace(',', '.'));
+          if (Number.isFinite(parsedOriginal) && parsedOriginal > 0) {
+            originalAmount = parsedOriginal;
+          }
+        }
+      }
+
+      const amountDiff = newAmount - currentAmount;
+
+      // Update the payment amount (audit-safe correction keeps original method/coffer)
+      const { error: updateErr } = await supabase
+        .from("payments")
+        .update({
+          amount: newAmount,
+          notes: `${reason} | Ancien: ${originalAmount} | Nouveau: ${newAmount}`,
+        })
+        .eq("id", paymentId);
+
+      if (updateErr) throw updateErr;
+
+      // Note: Payment corrections only affect Total Paid, not Total Facturé
+      // The remaining balance will be recalculated automatically based on payments
+
+      // If payment was by check, also update the check usage amount
+      if (existingPayment.check_id) {
+        await supabase
+          .from("check_inventory")
+          .update({ amount_used: newAmount })
+          .eq("id", existingPayment.check_id);
+      }
+
+      return jsonResponse({ success: true, message: "Payment corrected successfully", oldAmount: originalAmount, newAmount });
+    } catch (error: any) {
+      console.error("Error correcting payment:", error);
+      return jsonResponse({ error: error.message }, 500);
+    }
   }
 
   if (path.startsWith("/payments/") && method === "DELETE") {
@@ -11693,6 +11984,91 @@ if (!existingInv?.id) {
       return jsonResponse({ success: true });
     } catch (error: any) {
       console.error("Error deleting discount:", error);
+      return jsonResponse({ error: error.message }, 500);
+    }
+  }
+
+  // ===== Discount Correction =====
+  // POST /discounts/:id/correct
+  // Corrects the amount of an existing discount (remise)
+  if (path.startsWith("/discounts/") && path.endsWith("/correct") && method === "POST") {
+    try {
+      const discountId = path.split("/")[2];
+      if (!discountId) {
+        return jsonResponse({ error: "Discount ID is required" }, 400);
+      }
+
+      const body = await req.json().catch(() => ({}));
+      const currentUser = await getCurrentUserWithRole(req);
+      if (!currentUser) return jsonResponse({ error: "Unauthorized" }, 401);
+
+      const newAmount = Number(body.new_amount);
+      const oldAmountFromFrontend = Number(body.old_amount);
+      if (!Number.isFinite(newAmount) || newAmount < 0) {
+        return jsonResponse({ error: "new_amount must be >= 0" }, 400);
+      }
+
+      const reason = String(body.reason || "").trim() || "Correction remise";
+
+      // Get the existing discount
+      const { data: existingDiscount, error: fetchErr } = await supabase
+        .from("discounts")
+        .select("*")
+        .eq("id", discountId)
+        .maybeSingle();
+
+      if (fetchErr) throw fetchErr;
+      if (!existingDiscount) {
+        return jsonResponse({ error: "Discount not found" }, 404);
+      }
+
+      const currentAmount = Math.abs(Number(existingDiscount.discount_amount || existingDiscount.amount || 0));
+      
+      // Validate old_amount if provided from frontend (prevents double-submit issues)
+      if (Number.isFinite(oldAmountFromFrontend) && oldAmountFromFrontend !== currentAmount) {
+        return jsonResponse({ 
+          error: "Le montant a été modifié par une autre action. Veuillez rafraîchir les données.",
+          code: "AMOUNT_MISMATCH",
+          currentAmount: currentAmount
+        }, 409);
+      }
+
+      // Extract the TRUE original amount from notes if this was previously corrected
+      // Notes format: "Correction reason | Ancien: X | Nouveau: Y"
+      let originalAmount = currentAmount;
+      const existingNotes = String(existingDiscount.notes || "");
+      
+      if (existingNotes.includes("Ancien:") && existingNotes.includes("Nouveau:")) {
+        // Try to extract the original amount (first "Ancien:" value before any corrections)
+        const ancienMatch = existingNotes.match(/Ancien:\s*([0-9.,]+)/);
+        if (ancienMatch && ancienMatch[1]) {
+          const parsedOriginal = Math.abs(Number(String(ancienMatch[1]).replace(',', '.')));
+          if (Number.isFinite(parsedOriginal) && parsedOriginal > 0) {
+            originalAmount = parsedOriginal;
+          }
+        }
+      }
+
+      const amountDiff = newAmount - currentAmount;
+
+      // Update the discount amount
+      const { error: updateErr } = await supabase
+        .from("discounts")
+        .update({
+          discount_amount: newAmount,
+          amount: newAmount,
+          notes: `${reason} | Ancien: ${originalAmount} | Nouveau: ${newAmount}`,
+        })
+        .eq("id", discountId);
+
+      if (updateErr) throw updateErr;
+
+      // Note: Discount corrections only affect Total Paid (via remise), not Total Facturé
+      // The remaining balance will be recalculated automatically based on discounts
+
+      return jsonResponse({ success: true, message: "Discount corrected successfully", oldAmount: originalAmount, newAmount });
+    } catch (error: any) {
+      console.error("Error correcting discount:", error);
       return jsonResponse({ error: error.message }, 500);
     }
   }

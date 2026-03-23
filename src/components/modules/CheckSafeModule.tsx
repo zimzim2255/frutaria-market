@@ -26,6 +26,7 @@ interface SupplierAdvance {
   bank_transfer_reference?: string | null;
   bank_transfer_date?: string | null;
   notes?: string | null;
+  payment_date?: string | null;
   created_by_email?: string | null;
   created_by_role?: string | null;
   created_at: string;
@@ -166,6 +167,7 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
   const [globalPaymentLoading, setGlobalPaymentLoading] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState<'cash' | 'check' | 'bank_transfer'>('cash');
   const [checks, setChecks] = useState<any[]>([]);
+  const [supplierPaymentDate, setSupplierPaymentDate] = useState<string>(new Date().toISOString().split('T')[0]);
   // IMPORTANT:
   // - checksSafe: actual Coffre checks (check_safe)
   // - checks: legacy check_inventory list used only for the header "Non transférés"
@@ -200,6 +202,7 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
   const [advanceSupplierId, setAdvanceSupplierId] = useState<string>('');
   const [advanceAmount, setAdvanceAmount] = useState<string>('');
   const [advancePaymentMethod, setAdvancePaymentMethod] = useState<'cash' | 'check' | 'bank_transfer'>('cash');
+  const [advanceDate, setAdvanceDate] = useState<string>('');
   const [advanceCheckReference, setAdvanceCheckReference] = useState<string>('');
   const [advanceBankTransferReference, setAdvanceBankTransferReference] = useState<string>('');
   const [advanceBankTransferDate, setAdvanceBankTransferDate] = useState<string>('');
@@ -523,16 +526,17 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
           const sameCoffer = String(e.coffer_id || '') === String(cofferId || '');
           const type = normalizeMovementType(e.expense_type);
 
-          // Optional date range filter (created_at)
+          // Optional date range filter (payment_date or created_at)
           // UI passes YYYY-MM-DD, compare by creating boundaries.
+          const dateToCheck = e?.payment_date || e?.created_at;
           if (cofferMovementsDateFrom) {
             const fromT = new Date(`${cofferMovementsDateFrom}T00:00:00.000Z`).getTime();
-            const t = e?.created_at ? new Date(e.created_at).getTime() : NaN;
+            const t = dateToCheck ? new Date(dateToCheck).getTime() : NaN;
             if (Number.isFinite(fromT) && Number.isFinite(t) && t < fromT) return false;
           }
           if (cofferMovementsDateTo) {
             const toT = new Date(`${cofferMovementsDateTo}T23:59:59.999Z`).getTime();
-            const t = e?.created_at ? new Date(e.created_at).getTime() : NaN;
+            const t = dateToCheck ? new Date(dateToCheck).getTime() : NaN;
             if (Number.isFinite(toT) && Number.isFinite(t) && t > toT) return false;
           }
 
@@ -647,8 +651,8 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
         : (advanceCurrentStoreId ? String(advanceCurrentStoreId) : null);
 
       const filtered = effectiveStoreId
-        ? list.filter((s: any) => String(s.store_id || '') === String(effectiveStoreId))
-        : (advanceUserRole === 'admin' ? [] : list);
+        ? list.filter((s: any) => String(s.store_id || '') === String(effectiveStoreId) && !s.is_passage && s.type !== 'passage')
+        : (advanceUserRole === 'admin' ? list.filter((s: any) => !s.is_passage && s.type !== 'passage') : list.filter((s: any) => !s.is_passage && s.type !== 'passage'));
 
       filtered.sort((a: any, b: any) => String(a.name || '').localeCompare(String(b.name || '')));
       setAdvanceSuppliers(filtered);
@@ -1403,7 +1407,8 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
         const type = String(m?.expense_type || m?.type || '-');
         const reason = String(m?.reason || '-');
         const notes = String(m?.notes || '-');
-        const date = m?.created_at ? new Date(m.created_at).toLocaleString('fr-FR') : '-';
+        const dateRaw = m?.payment_date || m?.created_at;
+        const date = dateRaw ? new Date(dateRaw).toLocaleString('fr-FR') : '-';
         return {
           index: i + 1,
           type,
@@ -1541,6 +1546,170 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
     }
   };
 
+  const exportChecksToPdf = () => {
+    try {
+      const cofferName = coffers.find(c => c.id === selectedCofferId)?.name || 'Coffre';
+      const title = `Liste des Chèques - ${cofferName}`;
+      const now = new Date();
+
+      const doc = new jsPDF('l', 'mm', 'a4');
+      doc.setFontSize(16);
+      doc.text(title, 14, 14);
+      doc.setFontSize(10);
+      doc.text(`Généré le: ${now.toLocaleString('fr-FR')}`, 14, 22);
+      doc.text(`Total des chèques: ${sortedChecksSafe.length}`, 14, 28);
+      doc.text(`Montant total: ${sortedChecksSafe.reduce((sum, cs) => sum + (Number(cs?.amount) || 0), 0).toFixed(2)} MAD`, 14, 34);
+
+      const checksBody = (sortedChecksSafe || []).map((cs: any, i: number) => {
+        const amount = Number(cs?.amount ?? 0) || 0;
+        const status = getStatusLabel(String(cs?.status || ''));
+        const magasin = getCreatorLabel(cs);
+        const reference = resolveChequeNumber(cs);
+        const giver = cs?.giver || '-';
+        const dueDate = cs?.due_date ? new Date(cs.due_date).toLocaleDateString('fr-FR') : '-';
+        const createdAt = cs?.created_at ? new Date(cs.created_at).toLocaleDateString('fr-FR') : '-';
+        const transferredNote = cs?.payment_transferred_note || '-';
+        return [
+          String(i + 1),
+          String(reference),
+          String(magasin),
+          String(giver),
+          amount.toFixed(2),
+          String(status),
+          String(dueDate),
+          String(createdAt),
+          String(transferredNote),
+        ];
+      });
+
+      autoTable(doc, {
+        startY: 40,
+        head: [['#', 'N° Chèque', 'Magasin', 'Donneur', 'Montant (MAD)', 'Statut', 'Échéance', 'Date création', 'Transféré vers']],
+        body: checksBody,
+        styles: { fontSize: 8 },
+        headStyles: { fillColor: [37, 99, 235] },
+        theme: 'grid',
+        columnStyles: {
+          0: { cellWidth: 12 },
+          1: { cellWidth: 30 },
+          2: { cellWidth: 35 },
+          3: { cellWidth: 40 },
+          4: { cellWidth: 25 },
+          5: { cellWidth: 25 },
+          6: { cellWidth: 22 },
+          7: { cellWidth: 25 },
+          8: { cellWidth: 35 },
+        },
+      });
+
+      doc.save(`${title.replace(/\s+/g, '_')}_${now.toISOString().slice(0, 10)}.pdf`);
+      toast.success('Liste des chèques (PDF) téléchargée');
+    } catch (e) {
+      console.error(e);
+      toast.error("Erreur lors de l'export PDF des chèques");
+    }
+  };
+
+  const exportChecksToExcel = () => {
+    try {
+      const cofferName = coffers.find(c => c.id === selectedCofferId)?.name || 'Coffre';
+      const title = `Liste des Chèques - ${cofferName}`;
+      const now = new Date();
+      const dateStr = now.toLocaleString('fr-FR');
+      const totalAmount = sortedChecksSafe.reduce((sum, cs) => sum + (Number(cs?.amount) || 0), 0);
+
+      const checksRows = (sortedChecksSafe || []).map((cs: any, i: number) => {
+        const amount = Number(cs?.amount ?? 0) || 0;
+        const status = getStatusLabel(String(cs?.status || ''));
+        const magasin = getCreatorLabel(cs);
+        const reference = resolveChequeNumber(cs);
+        const giver = cs?.giver || '-';
+        const dueDate = cs?.due_date ? new Date(cs.due_date).toLocaleDateString('fr-FR') : '-';
+        const createdAt = cs?.created_at ? new Date(cs.created_at).toLocaleString('fr-FR') : '-';
+        const transferredNote = cs?.payment_transferred_note || '-';
+
+        return {
+          index: i + 1,
+          reference,
+          magasin,
+          giver,
+          montant: amount,
+          statut: status,
+          echeance: dueDate,
+          date: createdAt,
+          transfere_vers: transferredNote,
+        };
+      });
+
+      const esc = (v: any) => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+      const htmlContent = `
+      <html>
+        <head>
+          <meta charset="utf-8" />
+          <style>
+            body { font-family: Arial, sans-serif; }
+            h1 { font-size: 18px; margin: 0 0 6px 0; }
+            .meta { font-size: 12px; color: #555; margin-bottom: 12px; }
+            .summary { margin: 10px 0 14px 0; font-size: 12px; }
+            .summary td { padding: 4px 8px; border: 1px solid #ddd; }
+            table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+            th, td { border: 1px solid #ddd; padding: 6px 8px; font-size: 12px; }
+            th { background: #f3f4f6; text-align: left; }
+            .num { text-align: right; }
+          </style>
+        </head>
+        <body>
+          <h1>${esc(title)}</h1>
+          <div class="meta">Généré le: ${esc(dateStr)}</div>
+          
+          <table class="summary">
+            <tr><td><b>Total des chèques</b></td><td class="num">${sortedChecksSafe.length}</td></tr>
+            <tr><td><b>Montant total</b></td><td class="num">${totalAmount.toFixed(2)} MAD</td></tr>
+          </table>
+
+          <table>
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>N° Chèque</th>
+                <th>Magasin</th>
+                <th>Donneur</th>
+                <th class="num">Montant (MAD)</th>
+                <th>Statut</th>
+                <th>Échéance</th>
+                <th>Date création</th>
+                <th>Transféré vers</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${checksRows.map(r => `
+                <tr>
+                  <td>${r.index}</td>
+                  <td>${esc(r.reference)}</td>
+                  <td>${esc(r.magasin)}</td>
+                  <td>${esc(r.giver)}</td>
+                  <td class="num">${r.montant.toFixed(2)}</td>
+                  <td>${esc(r.statut)}</td>
+                  <td>${esc(r.echeance)}</td>
+                  <td>${esc(r.date)}</td>
+                  <td>${esc(r.transfere_vers)}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </body>
+      </html>`;
+
+      const fileName = `${title.replace(/\s+/g, '_')}_${now.toISOString().slice(0, 10)}.xls`;
+      downloadHtmlAsXls(fileName, htmlContent);
+      toast.success('Liste des chèques (Excel) téléchargée');
+    } catch (e) {
+      console.error(e);
+      toast.error("Erreur lors de l'export Excel des chèques");
+    }
+  };
+
   const exportMovementsToPdf = () => {
     try {
       const title = `Rapport Mouvements - ${coffers.find(c => c.id === selectedCofferId)?.name || 'Coffre'}`;
@@ -1567,7 +1736,8 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
         const type = String(m?.expense_type || m?.type || '-');
         const reason = String(m?.reason || '-');
         const notes = String(m?.notes || '-');
-        const date = m?.created_at ? new Date(m.created_at).toLocaleString('fr-FR') : '-';
+        const dateRaw = m?.payment_date || m?.created_at;
+        const date = dateRaw ? new Date(dateRaw).toLocaleString('fr-FR') : '-';
         return [String(i + 1), type, String(methodLabel || '-'), amount.toFixed(2), reason, notes, date];
       });
 
@@ -1843,7 +2013,7 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
     const getValue = (m: any) => {
       switch (key) {
         case 'date':
-          return sortDate(m?.created_at);
+          return sortDate(m?.payment_date || m?.created_at);
         case 'type':
           return sortString(m?.expense_type || m?.type);
         case 'reason':
@@ -2503,6 +2673,36 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
                 </button>
                 <button
                   onClick={() => {
+                    exportChecksToPdf();
+                    setExportDropdownOpen(false);
+                  }}
+                  className="w-full text-left px-4 py-2 hover:bg-blue-50 text-gray-700 text-sm flex items-center gap-2 border-b border-gray-100"
+                >
+                  <FileText className="w-4 h-4" />
+                  Chèques (PDF)
+                </button>
+                <button
+                  onClick={() => {
+                    exportCoffreToExcel();
+                    setExportDropdownOpen(false);
+                  }}
+                  className="w-full text-left px-4 py-2 hover:bg-blue-50 text-gray-700 text-sm flex items-center gap-2 border-b border-gray-100"
+                >
+                  <Download className="w-4 h-4" />
+                  Coffre (Excel)
+                </button>
+                <button
+                  onClick={() => {
+                    exportChecksToExcel();
+                    setExportDropdownOpen(false);
+                  }}
+                  className="w-full text-left px-4 py-2 hover:bg-blue-50 text-gray-700 text-sm flex items-center gap-2 border-b border-gray-100"
+                >
+                  <Download className="w-4 h-4" />
+                  Chèques (Excel)
+                </button>
+                <button
+                  onClick={() => {
                     exportMovementsToExcel();
                     setExportDropdownOpen(false);
                   }}
@@ -2957,6 +3157,17 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
                     <option value="bank_transfer">Virement</option>
                   </select>
                 </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label>Date de l'avance (optionnel)</Label>
+                <Input
+                  type="date"
+                  value={advanceDate}
+                  onChange={(e) => setAdvanceDate(e.target.value)}
+                  className="border-emerald-300 focus:border-emerald-500"
+                />
+                <p className="text-xs text-gray-500">Laissez vide pour utiliser la date du jour</p>
               </div>
 
               {advancePaymentMethod === 'check' && (
@@ -3434,6 +3645,7 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
                         coffer_id: selectedCofferId,
                         coffer_name: cofferName,
                         notes: advanceNotes || null,
+                        payment_date: advanceDate ? new Date(advanceDate + 'T12:00:00').toISOString() : null,
                       };
 
                       if (advanceUserRole === 'admin' && advanceFilterStore !== 'all') {
@@ -3489,6 +3701,7 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
                       setAdvanceSupplierId('');
                       setAdvanceAmount('');
                       setAdvancePaymentMethod('cash');
+                      setAdvanceDate('');
                       setAdvanceCheckReference('');
                       setAdvanceBankTransferReference('');
                       setAdvanceBankTransferDate('');
@@ -3828,6 +4041,7 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
                         supplier_id: selectedPaymentSupplier.id,
                         amount: amount,
                         payment_method: paymentMethod,
+                        payment_date: supplierPaymentDate ? new Date(supplierPaymentDate + 'T12:00:00').toISOString() : new Date().toISOString(),
                         coffer_id: selectedCofferId || 'main',
                         ...(paymentMethod === 'check'
                         ? {
@@ -3861,6 +4075,7 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
                         supplier_id: selectedPaymentSupplier.id,
                         amount: additionalAmount,
                         payment_method: additionalPaymentMethod,
+                        payment_date: supplierPaymentDate ? new Date(supplierPaymentDate + 'T12:00:00').toISOString() : new Date().toISOString(),
                         coffer_id: selectedCofferId || 'main',
                         ...(additionalPaymentMethod === 'check'
                         ? {
@@ -3905,6 +4120,7 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
                   setSelectedAdditionalCheck(null);
                   setAdditionalBankProofFile(null);
                   setGlobalPaymentSelectedMagasin(null);
+                  setSupplierPaymentDate(new Date().toISOString().split('T')[0]);
                   fetchSupplierPayments();
                   fetchDiscountsList();
                   fetchSuppliers();
@@ -3968,15 +4184,17 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
                   <div className="border border-gray-200 rounded-lg mt-2 max-h-48 overflow-y-auto">
                   {suppliers
                   .filter(s => {
-                  // Admin: Filter by selected magasin
-                  if (currentUserRole === 'admin' && globalPaymentSelectedMagasin) {
-                  if (String(s.store_id || '') !== String(globalPaymentSelectedMagasin.id)) return false;
-                  }
-                  // Filter by search term
-                  return (
-                  s.name?.toLowerCase().includes(paymentSupplierSearch.toLowerCase()) ||
-                  s.phone?.includes(paymentSupplierSearch)
-                  );
+                    // Filter out passage suppliers (is_passage=true or type='passage')
+                    if (s.is_passage || s.type === 'passage') return false;
+                    // Admin: Filter by selected magasin
+                    if (currentUserRole === 'admin' && globalPaymentSelectedMagasin) {
+                    if (String(s.store_id || '') !== String(globalPaymentSelectedMagasin.id)) return false;
+                    }
+                    // Filter by search term
+                    return (
+                    s.name?.toLowerCase().includes(paymentSupplierSearch.toLowerCase()) ||
+                    s.phone?.includes(paymentSupplierSearch)
+                    );
                   })
                   .map(supplier => {
                   const supplierPaymentsList = supplierPayments.filter(p => p.supplier_id === supplier.id);
@@ -4198,6 +4416,21 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
                     <option value="check">Chèque</option>
                     <option value="bank_transfer">Virement Bancaire</option>
                   </select>
+                </div>
+
+                {/* Payment Date Picker */}
+                <div>
+                  <Label htmlFor="supplier_payment_date" className="text-sm font-semibold text-gray-900 mb-2 block">Date du Paiement</Label>
+                  <Input
+                    type="date"
+                    id="supplier_payment_date"
+                    value={supplierPaymentDate}
+                    onChange={(e) => setSupplierPaymentDate(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                  />
+                  <p className="text-xs text-gray-600 mt-1">
+                    Sélectionnez la date à laquelle le paiement sera enregistré
+                  </p>
                 </div>
 
                 {/* Check Selection */}
@@ -4647,6 +4880,7 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
                       setAdditionalPaymentAmount('');
                       setSelectedAdditionalCheck(null);
                       setAdditionalBankProofFile(null);
+                      setSupplierPaymentDate(new Date().toISOString().split('T')[0]);
                     }}
                     className="text-sm"
                   >
@@ -4909,7 +5143,9 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
                     return (
                       <TableRow key={m.id} className="hover:bg-gray-50">
                         <TableCell className="text-sm">
-                          {m.created_at ? new Date(m.created_at).toLocaleString('fr-FR') : '-'}
+                          {m.payment_date || m.created_at
+                            ? new Date(m.payment_date || m.created_at).toLocaleString('fr-FR')
+                            : '-'}
                         </TableCell>
                         <TableCell className="text-sm">
                           <Badge className={isDeposit ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}>

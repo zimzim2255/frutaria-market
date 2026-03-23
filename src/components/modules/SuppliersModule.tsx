@@ -1661,9 +1661,21 @@ export function SuppliersModule({ session }: SuppliersModuleProps) {
       <SupplierDetailsPage
         supplier={detailsSupplier}
         session={session}
+        onSupplierUpdate={(updatedSupplier) => {
+          // Update details page state with fresh data from corrections
+          setDetailsSupplier(updatedSupplier);
+          // Also update main suppliers list to ensure FR table shows consistent values
+          setSuppliers((prev: any[]) => 
+            prev.map(s => s.id === updatedSupplier.id ? updatedSupplier : s)
+          );
+        }}
         onBack={() => {
           setShowDetailsPage(false);
           setDetailsSupplier(null);
+          // Refresh suppliers data when returning from details page to ensure sync
+          fetchSuppliers();
+          fetchPayments();
+          fetchDiscounts();
         }}
       />
     );
@@ -1919,7 +1931,7 @@ export function SuppliersModule({ session }: SuppliersModuleProps) {
                   <tbody>
                     {supplierPayments.map((payment, index) => (
                       <tr key={index} className="border-b hover:bg-gray-50">
-                        <td className="py-3 px-4">{new Date(payment.created_at).toLocaleDateString('fr-FR')}</td>
+                        <td className="py-3 px-4">{payment.payment_date || payment.created_at ? new Date(payment.payment_date || payment.created_at).toLocaleDateString('fr-FR') : '-'}</td>
                         <td className="py-3 px-4 font-semibold text-green-600">{payment.amount?.toFixed(2)} MAD</td>
                         <td className="py-3 px-4">
                           <Badge className="bg-blue-100 text-blue-800">{payment.payment_method || 'N/A'}</Badge>

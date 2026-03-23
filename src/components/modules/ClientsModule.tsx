@@ -55,6 +55,7 @@ export function ClientsModule({ session }: ClientsModuleProps) {
   const [globalPaymentReference, setGlobalPaymentReference] = useState('');
   const [globalPaymentLoading, setGlobalPaymentLoading] = useState(false);
   const [globalPaymentMethod, setGlobalPaymentMethod] = useState<'cash' | 'check' | 'bank_transfer'>('cash');
+  const [globalPaymentDate, setGlobalPaymentDate] = useState<string>(new Date().toISOString().split('T')[0]);
   const [checks, setChecks] = useState<any[]>([]);
   const [selectedCheck, setSelectedCheck] = useState<any>(null);
   const [bankProofFile, setBankProofFile] = useState<File | null>(null);
@@ -1297,7 +1298,7 @@ export function ClientsModule({ session }: ClientsModuleProps) {
               store_id: storeId,
               amount,
               payment_method: globalPaymentMethod,
-              payment_date: new Date().toISOString(),
+              payment_date: globalPaymentDate ? new Date(globalPaymentDate + 'T12:00:00').toISOString() : new Date().toISOString(),
               paid_by_store_id: paidByStoreId,
               paid_by_store_name: paidByStoreName,
               reference_number: String(globalPaymentReference || '').trim() || null,
@@ -1322,6 +1323,7 @@ export function ClientsModule({ session }: ClientsModuleProps) {
         setGlobalPaymentReference('');
         setGlobalPaymentClientSearch('');
         setGlobalPaymentMethod('cash');
+        setGlobalPaymentDate(new Date().toISOString().split('T')[0]);
         setAdditionalPaymentMethod(null);
         setAdditionalPaymentAmount('');
         setGlobalPaymentSelectedEntrepot(null);
@@ -1535,7 +1537,7 @@ export function ClientsModule({ session }: ClientsModuleProps) {
                 client_id: globalPaymentSelectedClient.id,
                 amount: paymentOnlyRecorded,
                 payment_method: globalPaymentMethod,
-                payment_date: new Date().toISOString(),
+                payment_date: globalPaymentDate ? new Date(globalPaymentDate + 'T12:00:00').toISOString() : new Date().toISOString(),
                 paid_by_store_id: paidByStoreId,
                 paid_by_store_name: paidByStoreName,
                 reference_number: String(globalPaymentReference || '').trim() || null,
@@ -1673,6 +1675,7 @@ export function ClientsModule({ session }: ClientsModuleProps) {
       setGlobalPaymentReference('');
       setGlobalPaymentClientSearch('');
       setGlobalPaymentMethod('cash');
+      setGlobalPaymentDate(new Date().toISOString().split('T')[0]);
       setAdditionalPaymentMethod(null);
       setAdditionalPaymentAmount('');
       setSelectedCheck(null);
@@ -2094,6 +2097,21 @@ export function ClientsModule({ session }: ClientsModuleProps) {
                         <option value="check">Chèque</option>
                         <option value="bank_transfer">Virement Bancaire</option>
                                               </select>
+                    </div>
+
+                    {/* Payment Date Picker */}
+                    <div className="space-y-2">
+                      <Label htmlFor="payment_date">Date du Paiement</Label>
+                      <Input
+                        type="date"
+                        id="payment_date"
+                        value={globalPaymentDate}
+                        onChange={(e) => setGlobalPaymentDate(e.target.value)}
+                        disabled={!globalPaymentSelectedClient || ((currentUserRole === 'admin' || session?.user?.user_metadata?.role === 'admin') && !adminSelectedStoreId)}
+                      />
+                      <p className="text-xs text-gray-600">
+                        Sélectionnez la date à laquelle le paiement sera enregistré
+                      </p>
                     </div>
 
                     {/* Add Another Payment Method Button */}

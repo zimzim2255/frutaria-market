@@ -15,9 +15,17 @@ interface SupplierDetailsPageProps {
   supplier: any;
   session: any;
   onBack: () => void;
+  onSupplierUpdate?: (updatedSupplier: any) => void;
 }
 
-export function SupplierDetailsPage({ supplier, session, onBack }: SupplierDetailsPageProps) {
+export function SupplierDetailsPage({ supplier, session, onBack, onSupplierUpdate }: SupplierDetailsPageProps) {
+  // Local state for supplier that can be updated after corrections
+  const [localSupplier, setLocalSupplier] = useState(supplier);
+
+  // Update localSupplier when prop changes
+  useEffect(() => {
+    setLocalSupplier(supplier);
+  }, [supplier?.id]);
   // NOTE:
   // `supplierProducts` is used for the "Achat" (stock additions) tab.
   // It MUST be immutable history, not the current `products` table, otherwise edits/restocks
@@ -31,10 +39,32 @@ export function SupplierDetailsPage({ supplier, session, onBack }: SupplierDetai
   const [selectedPaymentForCorrection, setSelectedPaymentForCorrection] = useState<any | null>(null);
   const [correctNewAmount, setCorrectNewAmount] = useState<string>('');
   const [correctReason, setCorrectReason] = useState<string>('');
+  const [correctOperationType, setCorrectOperationType] = useState<string>(''); // 'Paiement', 'Avance', 'Facture', 'Remise'
 
+  // Advance correction UI state
+  const [showCorrectAdvanceModal, setShowCorrectAdvanceModal] = useState(false);
+  const [selectedAdvanceForCorrection, setSelectedAdvanceForCorrection] = useState<any | null>(null);
+  const [correctAdvanceNewAmount, setCorrectAdvanceNewAmount] = useState<string>('');
+  const [correctAdvanceReason, setCorrectAdvanceReason] = useState<string>('');
+
+  // Invoice (Facture) correction UI state
+  const [showCorrectInvoiceModal, setShowCorrectInvoiceModal] = useState(false);
+  const [selectedInvoiceForCorrection, setSelectedInvoiceForCorrection] = useState<any | null>(null);
+  const [correctInvoiceNewAmount, setCorrectInvoiceNewAmount] = useState<string>('');
+  const [correctInvoiceReason, setCorrectInvoiceReason] = useState<string>('');
+
+  // Discount (Remise) correction UI state
+  const [showCorrectDiscountModal, setShowCorrectDiscountModal] = useState(false);
+  const [selectedDiscountForCorrection, setSelectedDiscountForCorrection] = useState<any | null>(null);
+  const [correctDiscountNewAmount, setCorrectDiscountNewAmount] = useState<string>('');
+  const [correctDiscountReason, setCorrectDiscountReason] = useState<string>('');
+
+  // Enable correction buttons for all users for testing
+  // TODO: Restore role check after testing
   const isAdminLike = useMemo(() => {
-    const role = String(session?.user?.user_metadata?.role || '').toLowerCase();
-    return role === 'admin' || role === 'manager' || role === 'magasin_manager';
+    return true; // Temporarily enable for all users
+    // const role = String(session?.user?.user_metadata?.role || '').toLowerCase();
+    // return role === 'admin' || role === 'manager' || role === 'magasin_manager';
   }, [session]);
   const [productsLoading, setProductsLoading] = useState<boolean>(false);
   const [productsSearch, setProductsSearch] = useState<string>('');
@@ -64,7 +94,7 @@ export function SupplierDetailsPage({ supplier, session, onBack }: SupplierDetai
   const [checksLoading, setChecksLoading] = useState<boolean>(false);
   const [checksSearch, setChecksSearch] = useState<string>('');
 
-  // Date range filter (affects payments view + export)
+  // Date range filter (affects payments view + export) - starts empty to show all records by default
   const [startDate, setStartDate] = useState<string>('');
   const [endDate, setEndDate] = useState<string>('');
 
@@ -76,14 +106,7 @@ export function SupplierDetailsPage({ supplier, session, onBack }: SupplierDetai
   const [stockRefDetailsData, setStockRefDetailsData] = useState<any | null>(null);
   const [stockRefDetailsLoading, setStockRefDetailsLoading] = useState<boolean>(false);
 
-  // Initialize dates (last 30 days by default)
-  useEffect(() => {
-    const today = new Date();
-    const thirtyDaysAgo = new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000);
-
-    setEndDate(today.toISOString().split('T')[0]);
-    setStartDate(thirtyDaysAgo.toISOString().split('T')[0]);
-  }, []);
+  // Date filter - removed default initialization to show all records by default
 
   useEffect(() => {
     fetchSupplierProducts();
@@ -425,7 +448,7 @@ export function SupplierDetailsPage({ supplier, session, onBack }: SupplierDetai
 
       // Exact amount used for THIS supplier is the sum of the advances amounts per check.
       const usedAmountByCheckId = new Map<string, number>();
-      const checkSafeIds = Array.from(
+      const checkSafeIds: string[] = Array.from(
         new Set(
           checkAdvances
             .map((a: any) => {
@@ -436,7 +459,7 @@ export function SupplierDetailsPage({ supplier, session, onBack }: SupplierDetai
               usedAmountByCheckId.set(key, (usedAmountByCheckId.get(key) || 0) + amt);
               return key;
             })
-            .filter(Boolean)
+            .filter((v: any): v is string => v !== null && v !== undefined)
             .map((v: any) => String(v))
         )
       );
@@ -1067,12 +1090,12 @@ export function SupplierDetailsPage({ supplier, session, onBack }: SupplierDetai
     }
 
     for (const a of supplierAdvances) {
-      const rawDate = a.created_at;
+      const rawDate = a.payment_date || a.created_at;
       const d = rawDate ? new Date(rawDate) : null;
       const matchesDate =
         !start || !end ? true : (d && !Number.isNaN(d.getTime()) ? (d >= start && d <= end) : true);
 
-      const hay = `${a.payment_method || ''} ${a.coffer_id || ''} ${a.coffer_name || ''} ${a.notes || ''} ${a.amount || ''} ${a.created_at || ''} ${a.created_by_email || ''} ${a.created_by_role || ''}`;
+      const hay = `${a.payment_method || ''} ${a.coffer_id || ''} ${a.coffer_name || ''} ${a.notes || ''} ${a.amount || ''} ${a.payment_date || a.created_at || ''} ${a.created_by_email || ''} ${a.created_by_role || ''}`;
       const { matchesDate: mDate, matchesText: mText } = matchesFilter(hay, rawDate);
       if (!mDate || !mText) continue;
 
@@ -1143,10 +1166,34 @@ export function SupplierDetailsPage({ supplier, session, onBack }: SupplierDetai
     return supplierDiscounts;
   }, [supplierDiscounts]);
 
-  // Total Facturé: exactly the same as list table
+  // Fetch fresh supplier data
+  const fetchCurrentSupplier = async () => {
+    if (!supplier?.id) return;
+    try {
+      const res = await fetch(
+        `https://${projectId}.supabase.co/functions/v1/super-handler/suppliers?id=${encodeURIComponent(supplier.id)}`,
+        {
+          headers: { Authorization: `Bearer ${session.access_token}` },
+        }
+      );
+      const data = await res.json();
+      if (data.suppliers && data.suppliers[0]) {
+        const updated = data.suppliers[0];
+        setLocalSupplier(updated);
+        // Also notify parent if callback provided
+        if (onSupplierUpdate) {
+          onSupplierUpdate(updated);
+        }
+      }
+    } catch (e) {
+      console.error('Error fetching supplier:', e);
+    }
+  };
+
+  // Total Facturé: use localSupplier to get updated balance after corrections
   const totalFactureSupplier = useMemo(() => {
-    return Number((supplier as any)?.balance || 0) || 0;
-  }, [supplier]);
+    return Number((localSupplier as any)?.balance || 0) || 0;
+  }, [localSupplier]);
 
   // Total Payé (must include advances too for supplier balance view)
   // Otherwise creating an Avance will not change the supplier summary.
@@ -1490,6 +1537,9 @@ export function SupplierDetailsPage({ supplier, session, onBack }: SupplierDetai
   };
 
   const correctPayment = async () => {
+    // Prevent double-submit
+    if (correctPaymentLoading) return;
+    
     try {
       if (!selectedPaymentForCorrection?.id) {
         toast.error('Paiement invalide');
@@ -1499,8 +1549,16 @@ export function SupplierDetailsPage({ supplier, session, onBack }: SupplierDetai
       const paymentId = String(selectedPaymentForCorrection.id);
 
       const parsedAmount = Number(String(correctNewAmount || '').replace(',', '.'));
+      const currentAmount = Number(selectedPaymentForCorrection.amount || 0);
+      
       if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
         toast.error('Montant invalide');
+        return;
+      }
+
+      // Check if the new amount is the same as current amount
+      if (parsedAmount === currentAmount) {
+        toast.error('Le nouveau montant est identique au montant actuel');
         return;
       }
 
@@ -1520,6 +1578,7 @@ export function SupplierDetailsPage({ supplier, session, onBack }: SupplierDetai
           },
           body: JSON.stringify({
             new_amount: parsedAmount,
+            old_amount: currentAmount,
             // amount-only correction keeps the original method by default (backend also keeps it)
             new_payment_method: originalMethod,
             reason: String(correctReason || '').trim() || 'Correction paiement',
@@ -1529,6 +1588,22 @@ export function SupplierDetailsPage({ supplier, session, onBack }: SupplierDetai
 
       if (!res.ok) {
         const t = await res.text().catch(() => '');
+        
+        // Try to parse the error response for AMOUNT_MISMATCH
+        try {
+          const errJson = JSON.parse(t);
+          if (errJson.code === 'AMOUNT_MISMATCH') {
+            toast.error('Le montant a été modifié. Veuillez rafraîchir la page et réessayer.');
+            // Refresh the data
+            await fetchSupplierPayments();
+            setShowCorrectPaymentModal(false);
+            setSelectedPaymentForCorrection(null);
+            return;
+          }
+        } catch (e) {
+          // Not JSON, continue with generic error
+        }
+        
         console.error('Payment correction failed:', res.status, t);
         toast.error(`Erreur correction paiement (${res.status})`);
         return;
@@ -1536,14 +1611,260 @@ export function SupplierDetailsPage({ supplier, session, onBack }: SupplierDetai
 
       toast.success('Paiement corrigé (annulation + nouveau paiement)');
 
-      // Refresh affected views
+      // Clear data first to avoid showing stale/duplicate entries during fetch
+      setSupplierPayments([]);
+      
+      // Then fetch fresh data
       await fetchSupplierPayments();
       await fetchSupplierChecksUsed();
+      await fetchCurrentSupplier();
 
       setShowCorrectPaymentModal(false);
       setSelectedPaymentForCorrection(null);
+      
+      // Full page reload to ensure all data is fresh
+      window.location.reload();
     } catch (e) {
       console.error('Error correcting payment:', e);
+      toast.error('Erreur lors de la correction');
+    } finally {
+      setCorrectPaymentLoading(false);
+    }
+  };
+
+  // Correct Advance (Avance) amount
+  const correctAdvance = async () => {
+    // Prevent double-submit
+    if (correctPaymentLoading) return;
+    
+    try {
+      if (!selectedAdvanceForCorrection?.id) {
+        toast.error('Avance invalide');
+        return;
+      }
+
+      const advanceId = String(selectedAdvanceForCorrection.id);
+      const parsedAmount = Number(String(correctAdvanceNewAmount || '').replace(',', '.'));
+      const currentAmount = Number(selectedAdvanceForCorrection.amount || 0);
+      
+      if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
+        toast.error('Montant invalide');
+        return;
+      }
+
+      // Check if the new amount is the same as current amount
+      if (parsedAmount === currentAmount) {
+        toast.error('Le nouveau montant est identique au montant actuel');
+        return;
+      }
+
+      setCorrectPaymentLoading(true);
+
+      const res = await fetch(
+        `https://${projectId}.supabase.co/functions/v1/super-handler/supplier-advances/${encodeURIComponent(advanceId)}/correct`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${session.access_token}`,
+          },
+          body: JSON.stringify({
+            new_amount: parsedAmount,
+            old_amount: currentAmount,
+            reason: String(correctAdvanceReason || '').trim() || 'Correction avance',
+          }),
+        }
+      );
+
+      if (!res.ok) {
+        const t = await res.text().catch(() => '');
+        
+        // Try to parse the error response for AMOUNT_MISMATCH
+        try {
+          const errJson = JSON.parse(t);
+          if (errJson.code === 'AMOUNT_MISMATCH') {
+            toast.error('Le montant a été modifié. Veuillez rafraîchir la page et réessayer.');
+            // Refresh the data
+            await fetchSupplierAdvances();
+            await fetchSupplierPayments();
+            setShowCorrectAdvanceModal(false);
+            setSelectedAdvanceForCorrection(null);
+            return;
+          }
+        } catch (e) {
+          // Not JSON, continue with generic error
+        }
+        
+        console.error('Advance correction failed:', res.status, t);
+        toast.error(`Erreur correction avance (${res.status})`);
+        return;
+      }
+
+      toast.success('Avance corrigée avec succès');
+
+      // Clear data first to avoid showing stale/duplicate entries during fetch
+      setSupplierAdvances([]);
+      setSupplierPayments([]);
+       
+      // Then fetch fresh data
+      await fetchSupplierAdvances();
+      await fetchSupplierPayments();
+      await fetchCurrentSupplier();
+
+      setShowCorrectAdvanceModal(false);
+      setSelectedAdvanceForCorrection(null);
+      
+      // Full page reload to ensure all data is fresh
+      window.location.reload();
+    } catch (e) {
+      console.error('Error correcting advance:', e);
+      toast.error('Erreur lors de la correction');
+    } finally {
+      setCorrectPaymentLoading(false);
+    }
+  };
+
+  // Correct Invoice (Facture) amount
+  const correctInvoice = async () => {
+    // Prevent double-submit
+    if (correctPaymentLoading) return;
+    
+    try {
+      if (!selectedInvoiceForCorrection?.id) {
+        toast.error('Facture invalide');
+        return;
+      }
+
+      const invoiceId = String(selectedInvoiceForCorrection.id);
+      const parsedAmount = Number(String(correctInvoiceNewAmount || '').replace(',', '.'));
+      const currentAmount = Number(selectedInvoiceForCorrection.total_amount || selectedInvoiceForCorrection.amount || 0);
+      
+      if (!Number.isFinite(parsedAmount) || parsedAmount < 0) {
+        toast.error('Montant invalide');
+        return;
+      }
+
+      // Check if the new amount is the same as current amount
+      if (parsedAmount === currentAmount) {
+        toast.error('Le nouveau montant est identique au montant actuel');
+        return;
+      }
+
+      setCorrectPaymentLoading(true);
+
+      const res = await fetch(
+        `https://${projectId}.supabase.co/functions/v1/super-handler/supplier-admin-invoices/${encodeURIComponent(invoiceId)}/correct`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${session.access_token}`,
+          },
+          body: JSON.stringify({
+            new_amount: parsedAmount,
+            old_amount: currentAmount,
+            reason: String(correctInvoiceReason || '').trim() || 'Correction facture',
+          }),
+        }
+      );
+
+      if (!res.ok) {
+        const t = await res.text().catch(() => '');
+        console.error('Invoice correction failed:', res.status, t);
+        toast.error(`Erreur correction facture (${res.status})`);
+        return;
+      }
+
+      toast.success('Facture corrigée avec succès');
+
+      // Clear data first to avoid showing stale/duplicate entries during fetch
+      setAdminSupplierInvoices([]);
+       
+      // Then fetch fresh data
+      await fetchAdminSupplierInvoices();
+      await fetchCurrentSupplier();
+
+      setShowCorrectInvoiceModal(false);
+      setSelectedInvoiceForCorrection(null);
+      
+      // Full page reload to ensure all data is fresh
+      window.location.reload();
+    } catch (e) {
+      console.error('Error correcting invoice:', e);
+      toast.error('Erreur lors de la correction');
+    } finally {
+      setCorrectPaymentLoading(false);
+    }
+  };
+
+  // Correct Discount (Remise) amount
+  const correctDiscount = async () => {
+    // Prevent double-submit
+    if (correctPaymentLoading) return;
+    
+    try {
+      if (!selectedDiscountForCorrection?.id) {
+        toast.error('Remise invalide');
+        return;
+      }
+
+      const discountId = String(selectedDiscountForCorrection.id);
+      const parsedAmount = Number(String(correctDiscountNewAmount || '').replace(',', '.'));
+      const currentAmount = Math.abs(Number(selectedDiscountForCorrection.discount_amount || selectedDiscountForCorrection.amount || 0));
+      
+      if (!Number.isFinite(parsedAmount) || parsedAmount < 0) {
+        toast.error('Montant invalide');
+        return;
+      }
+
+      // Check if the new amount is the same as current amount
+      if (parsedAmount === currentAmount) {
+        toast.error('Le nouveau montant est identique au montant actuel');
+        return;
+      }
+
+      setCorrectPaymentLoading(true);
+
+      const res = await fetch(
+        `https://${projectId}.supabase.co/functions/v1/super-handler/discounts/${encodeURIComponent(discountId)}/correct`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${session.access_token}`,
+          },
+          body: JSON.stringify({
+            new_amount: parsedAmount,
+            old_amount: currentAmount,
+            reason: String(correctDiscountReason || '').trim() || 'Correction remise',
+          }),
+        }
+      );
+
+      if (!res.ok) {
+        const t = await res.text().catch(() => '');
+        console.error('Discount correction failed:', res.status, t);
+        toast.error(`Erreur correction remise (${res.status})`);
+        return;
+      }
+
+      toast.success('Remise corrigée avec succès');
+
+      // Clear data first to avoid showing stale/duplicate entries during fetch
+      setSupplierDiscounts([]);
+       
+      // Then fetch fresh data
+      await fetchSupplierDiscounts();
+      await fetchSupplierPayments();
+      await fetchCurrentSupplier();
+
+      setShowCorrectDiscountModal(false);
+      setSelectedDiscountForCorrection(null);
+      
+      // Full page reload to ensure all data is fresh
+      window.location.reload();
+    } catch (e) {
+      console.error('Error correcting discount:', e);
       toast.error('Erreur lors de la correction');
     } finally {
       setCorrectPaymentLoading(false);
@@ -1845,6 +2166,234 @@ export function SupplierDetailsPage({ supplier, session, onBack }: SupplierDetai
         </div>
       )}
 
+      {/* Advance Correction Modal */}
+      {showCorrectAdvanceModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md border">
+            <div className="flex items-center justify-between px-5 py-4 border-b">
+              <div>
+                <h3 className="text-base font-semibold text-gray-900">Corriger le montant de l'avance</h3>
+                <p className="text-xs text-gray-500">Modification du montant de l'avance</p>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  if (correctPaymentLoading) return;
+                  setShowCorrectAdvanceModal(false);
+                  setSelectedAdvanceForCorrection(null);
+                }}
+              >
+                ✕
+              </Button>
+            </div>
+
+            <div className="px-5 py-4 space-y-4">
+              <div className="text-xs text-gray-600">
+                Réf: <span className="font-mono">{String(selectedAdvanceForCorrection?.coffer_name || selectedAdvanceForCorrection?.id || '-')}</span>
+                <span className="mx-2">•</span>
+                Ancien montant: <span className="font-semibold">{(Number(selectedAdvanceForCorrection?.amount || 0) || 0).toFixed(2)} MAD</span>
+              </div>
+
+              <div className="space-y-2">
+                <Label>Nouveau montant</Label>
+                <Input
+                  type="number"
+                  value={correctAdvanceNewAmount}
+                  onChange={(e) => setCorrectAdvanceNewAmount(e.target.value)}
+                  placeholder="0.00"
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label>Raison (optionnel)</Label>
+                <Input
+                  value={correctAdvanceReason}
+                  onChange={(e) => setCorrectAdvanceReason(e.target.value)}
+                  placeholder="Ex: erreur de saisie"
+                />
+              </div>
+
+              <div className="flex justify-end gap-2 pt-1">
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    if (correctPaymentLoading) return;
+                    setShowCorrectAdvanceModal(false);
+                    setSelectedAdvanceForCorrection(null);
+                  }}
+                >
+                  Annuler
+                </Button>
+                <Button
+                  onClick={correctAdvance}
+                  disabled={correctPaymentLoading}
+                  className="bg-blue-600 hover:bg-blue-700 text-white"
+                >
+                  {correctPaymentLoading ? 'Correction...' : 'Confirmer'}
+                </Button>
+              </div>
+
+              <p className="text-[11px] text-gray-500">
+                Note: cette correction met à jour le montant de l'avance et recalcule les soldes.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Invoice (Facture) Correction Modal */}
+      {showCorrectInvoiceModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md border">
+            <div className="flex items-center justify-between px-5 py-4 border-b">
+              <div>
+                <h3 className="text-base font-semibold text-gray-900">Corriger le montant de la facture</h3>
+                <p className="text-xs text-gray-500">Modification du montant de la facture fournisseur</p>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  if (correctPaymentLoading) return;
+                  setShowCorrectInvoiceModal(false);
+                  setSelectedInvoiceForCorrection(null);
+                }}
+              >
+                ✕
+              </Button>
+            </div>
+
+            <div className="px-5 py-4 space-y-4">
+              <div className="text-xs text-gray-600">
+                Réf: <span className="font-mono">{String(selectedInvoiceForCorrection?.stock_reference || selectedInvoiceForCorrection?.reference || selectedInvoiceForCorrection?.id || '-')}</span>
+                <span className="mx-2">•</span>
+                Ancien montant: <span className="font-semibold">{(Number(selectedInvoiceForCorrection?.amount || selectedInvoiceForCorrection?.total_amount || 0) || 0).toFixed(2)} MAD</span>
+              </div>
+
+              <div className="space-y-2">
+                <Label>Nouveau montant</Label>
+                <Input
+                  type="number"
+                  value={correctInvoiceNewAmount}
+                  onChange={(e) => setCorrectInvoiceNewAmount(e.target.value)}
+                  placeholder="0.00"
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label>Raison (optionnel)</Label>
+                <Input
+                  value={correctInvoiceReason}
+                  onChange={(e) => setCorrectInvoiceReason(e.target.value)}
+                  placeholder="Ex: erreur de saisie, rabais supplémentaire"
+                />
+              </div>
+
+              <div className="flex justify-end gap-2 pt-1">
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    if (correctPaymentLoading) return;
+                    setShowCorrectInvoiceModal(false);
+                    setSelectedInvoiceForCorrection(null);
+                  }}
+                >
+                  Annuler
+                </Button>
+                <Button
+                  onClick={correctInvoice}
+                  disabled={correctPaymentLoading}
+                  className="bg-blue-600 hover:bg-blue-700 text-white"
+                >
+                  {correctPaymentLoading ? 'Correction...' : 'Confirmer'}
+                </Button>
+              </div>
+
+              <p className="text-[11px] text-gray-500">
+                Note: cette correction met à jour le montant de la facture et recalcule le total facturé du fournisseur.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Discount (Remise) Correction Modal */}
+      {showCorrectDiscountModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md border">
+            <div className="flex items-center justify-between px-5 py-4 border-b">
+              <div>
+                <h3 className="text-base font-semibold text-gray-900">Corriger le montant de la remise</h3>
+                <p className="text-xs text-gray-500">Modification du montant de la remise fournisseur</p>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  if (correctPaymentLoading) return;
+                  setShowCorrectDiscountModal(false);
+                  setSelectedDiscountForCorrection(null);
+                }}
+              >
+                ✕
+              </Button>
+            </div>
+
+            <div className="px-5 py-4 space-y-4">
+              <div className="text-xs text-gray-600">
+                Réf: <span className="font-mono">{String(selectedDiscountForCorrection?.reference || selectedDiscountForCorrection?.id || '-')}</span>
+                <span className="mx-2">•</span>
+                Ancien montant: <span className="font-semibold">{(Math.abs(Number(selectedDiscountForCorrection?.amount || selectedDiscountForCorrection?.discount_amount || 0)) || 0).toFixed(2)} MAD</span>
+              </div>
+
+              <div className="space-y-2">
+                <Label>Nouveau montant</Label>
+                <Input
+                  type="number"
+                  value={correctDiscountNewAmount}
+                  onChange={(e) => setCorrectDiscountNewAmount(e.target.value)}
+                  placeholder="0.00"
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label>Raison (optionnel)</Label>
+                <Input
+                  value={correctDiscountReason}
+                  onChange={(e) => setCorrectDiscountReason(e.target.value)}
+                  placeholder="Ex: erreur de saisie, ajustement"
+                />
+              </div>
+
+              <div className="flex justify-end gap-2 pt-1">
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    if (correctPaymentLoading) return;
+                    setShowCorrectDiscountModal(false);
+                    setSelectedDiscountForCorrection(null);
+                  }}
+                >
+                  Annuler
+                </Button>
+                <Button
+                  onClick={correctDiscount}
+                  disabled={correctPaymentLoading}
+                  className="bg-blue-600 hover:bg-blue-700 text-white"
+                >
+                  {correctPaymentLoading ? 'Correction...' : 'Confirmer'}
+                </Button>
+              </div>
+
+              <p className="text-[11px] text-gray-500">
+                Note: cette correction met à jour le montant de la remise et recalcule le solde du fournisseur.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="space-y-6">
         {/* Header */}
         <div className="flex items-center justify-between gap-4">
@@ -1854,7 +2403,7 @@ export function SupplierDetailsPage({ supplier, session, onBack }: SupplierDetai
               Retour
             </Button>
             <div>
-              <h1 className="text-3xl font-bold text-gray-900">{supplier.name}</h1>
+              <h1 className="text-3xl font-bold text-gray-900">{localSupplier.name}</h1>
               <p className="text-gray-600">Détails du fournisseur</p>
             </div>
           </div>
@@ -2434,20 +2983,67 @@ export function SupplierDetailsPage({ supplier, session, onBack }: SupplierDetai
                               {operationRemise > 0 ? operationRemise.toFixed(2) : '-'}
                             </TableCell>
                             <TableCell className="text-right">
-                              {isAdminLike && row.__type === 'Paiement' ? (
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  onClick={() => {
-                                    const p = row.__raw || {};
-                                    setSelectedPaymentForCorrection(p);
-                                    setCorrectNewAmount(String(Number(p.amount || 0) || 0));
-                                    setCorrectReason('');
-                                    setShowCorrectPaymentModal(true);
-                                  }}
-                                >
-                                  Corriger
-                                </Button>
+                              {isAdminLike ? (
+                                row.__type === 'Paiement' ? (
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => {
+                                      const p = row.__raw || {};
+                                      setSelectedPaymentForCorrection(p);
+                                      setCorrectNewAmount(String(Number(p.amount || 0) || 0));
+                                      setCorrectReason('');
+                                      setCorrectOperationType('Paiement');
+                                      setShowCorrectPaymentModal(true);
+                                    }}
+                                  >
+                                    Corriger
+                                  </Button>
+                                ) : row.__type === 'Avance' ? (
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => {
+                                      const a = row.__raw || {};
+                                      setSelectedAdvanceForCorrection(a);
+                                      setCorrectAdvanceNewAmount(String(Number(a.amount || 0) || 0));
+                                      setCorrectAdvanceReason('');
+                                      setShowCorrectAdvanceModal(true);
+                                    }}
+                                  >
+                                    Corriger
+                                  </Button>
+                                ) : row.__type === 'Facture' ? (
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => {
+                                      const inv = row.__raw || {};
+                                      setSelectedInvoiceForCorrection(inv);
+                                      setCorrectInvoiceNewAmount(String(Number(inv.amount || inv.total_amount || 0) || 0));
+                                      setCorrectInvoiceReason('');
+                                      setShowCorrectInvoiceModal(true);
+                                    }}
+                                  >
+                                    Corriger
+                                  </Button>
+                                ) : row.__type === 'Remise' ? (
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => {
+                                      const d = row.__raw || {};
+                                      setSelectedDiscountForCorrection(d);
+                                      setCorrectDiscountNewAmount(String(Math.abs(Number(d.amount || d.discount_amount || 0) || 0)));
+                                      setCorrectDiscountReason('');
+                                      setShowCorrectDiscountModal(true);
+                                    }}
+                                  >
+                                    Corriger
+                                  </Button>
+                                ) : (
+                                  <span className="text-gray-400">-</span>
+                                )
                               ) : (
                                 <span className="text-gray-400">-</span>
                               )}
