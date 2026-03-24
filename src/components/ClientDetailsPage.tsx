@@ -2666,17 +2666,17 @@ export function ClientDetailsPage({ client, session, onBack }: ClientDetailsPage
                 Annuler
               </Button>
               <Button
-                className="flex-1 bg-orange-600 hover:bg-orange-700"
+                style={{ backgroundColor: '#ea580c', color: 'white', border: '1px solid #7c2d12' }}
                 onClick={submitEditGlobalPayment}
                 disabled={editGpSaving}
               >
                 {editGpSaving ? (
-                  <span className="inline-flex items-center gap-2">
+                  <span style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'white' }}>
                     <Loader2 className="w-4 h-4 animate-spin" />
                     Enregistrement...
                   </span>
                 ) : (
-                  <span className="inline-flex items-center gap-2">
+                  <span style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'white' }}>
                     <Save className="w-4 h-4" />
                     Enregistrer
                   </span>
