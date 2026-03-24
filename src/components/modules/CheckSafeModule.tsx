@@ -1560,19 +1560,25 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
       doc.text(`Total des chèques: ${sortedChecksSafe.length}`, 14, 28);
       doc.text(`Montant total: ${sortedChecksSafe.reduce((sum, cs) => sum + (Number(cs?.amount) || 0), 0).toFixed(2)} MAD`, 14, 34);
 
+      // Build store map for export
+      const storeByIdMap = new Map<string, any>((stores || []).map((s: any) => [String(s.id), s]));
       const checksBody = (sortedChecksSafe || []).map((cs: any, i: number) => {
         const amount = Number(cs?.amount ?? 0) || 0;
         const status = getStatusLabel(String(cs?.status || ''));
-        const magasin = getCreatorLabel(cs);
+        // Try to get store from check_safe.store_id or from enriched created_by_store
+        const storeId = cs?.store_id;
+        const storeName = storeId ? (storeByIdMap?.get(String(storeId))?.name || getCreatorLabel(cs)) : getCreatorLabel(cs);
         const reference = resolveChequeNumber(cs);
-        const giver = cs?.giver || '-';
-        const dueDate = cs?.due_date ? new Date(cs.due_date).toLocaleDateString('fr-FR') : '-';
+        // Use giver_name field (added in migration 108)
+        const giver = cs?.giver_name || cs?.given_to || cs?.giver || '-';
+        // Use check_due_date (added in migration 130) or due_date
+        const dueDate = cs?.check_due_date ? new Date(cs.check_due_date).toLocaleDateString('fr-FR') : (cs?.due_date ? new Date(cs.due_date).toLocaleDateString('fr-FR') : '-');
         const createdAt = cs?.created_at ? new Date(cs.created_at).toLocaleDateString('fr-FR') : '-';
         const transferredNote = cs?.payment_transferred_note || '-';
         return [
           String(i + 1),
           String(reference),
-          String(magasin),
+          String(storeName),
           String(giver),
           amount.toFixed(2),
           String(status),
@@ -1618,13 +1624,19 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
       const dateStr = now.toLocaleString('fr-FR');
       const totalAmount = sortedChecksSafe.reduce((sum, cs) => sum + (Number(cs?.amount) || 0), 0);
 
+      // Build store map for export
+      const storeByIdMap = new Map<string, any>((stores || []).map((s: any) => [String(s.id), s]));
       const checksRows = (sortedChecksSafe || []).map((cs: any, i: number) => {
         const amount = Number(cs?.amount ?? 0) || 0;
         const status = getStatusLabel(String(cs?.status || ''));
-        const magasin = getCreatorLabel(cs);
+        // Try to get store from check_safe.store_id or from enriched created_by_store
+        const storeId = cs?.store_id;
+        const magasin = storeId ? (storeByIdMap?.get(String(storeId))?.name || getCreatorLabel(cs)) : getCreatorLabel(cs);
         const reference = resolveChequeNumber(cs);
-        const giver = cs?.giver || '-';
-        const dueDate = cs?.due_date ? new Date(cs.due_date).toLocaleDateString('fr-FR') : '-';
+        // Use giver_name field (added in migration 108)
+        const giver = cs?.giver_name || cs?.given_to || cs?.giver || '-';
+        // Use check_due_date (added in migration 130) or due_date
+        const dueDate = cs?.check_due_date ? new Date(cs.check_due_date).toLocaleDateString('fr-FR') : (cs?.due_date ? new Date(cs.due_date).toLocaleDateString('fr-FR') : '-');
         const createdAt = cs?.created_at ? new Date(cs.created_at).toLocaleString('fr-FR') : '-';
         const transferredNote = cs?.payment_transferred_note || '-';
 

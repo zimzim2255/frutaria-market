@@ -581,8 +581,26 @@ export default function BonCommandeModule({ session, onBack, sale, adminSelected
     return (refKey ? templateByReference.get(refKey) : null) || null;
   };
 
+  // Calculate cumulative quantity for a product across all order lines
+  const getCumulativeQuantity = (productId: string, currentItemId: string): number => {
+    return orderData.items.reduce((sum, item) => {
+      if (item.product_id === productId && item.id !== currentItemId) {
+        return sum + (Number(item.quantity) || 0);
+      }
+      return sum;
+    }, 0);
+  };
+
+  // Get remaining stock for a product considering all order lines
+  const getRemainingStock = (productId: string, currentItemId: string): number => {
+    const item = orderData.items.find(i => i.id === currentItemId);
+    const availableStock = Number((item as any)?.__available_stock) || 0;
+    const usedStock = getCumulativeQuantity(productId, currentItemId);
+    return Math.max(0, availableStock - usedStock);
+  };
+
   const handleItemChange = (id: string, field: keyof OrderItem, value: string | number): void => {
-    // If changing moyenne, validate against template fourchette (fallback product)
+    // If changing moyenne, validate against template sulphate (fallback product)
     if (field === 'moyenne') {
       const moyenneValue = parseFloat(String(value)) || 0;
       const item = orderData.items.find(i => i.id === id);
@@ -1197,6 +1215,7 @@ export default function BonCommandeModule({ session, onBack, sale, adminSelected
                   <th className="text-left py-2 px-2">Moyenne</th>
                   <th className="text-left py-2 px-2">Prix Unitaire</th>
                   <th className="text-left py-2 px-2">Sous-total</th>
+                  <th className="text-left py-2 px-2 text-xs">Stock Disp.</th>
                   <th className="text-center py-2 px-2">Action</th>
                 </tr>
               </thead>
@@ -1367,12 +1386,27 @@ export default function BonCommandeModule({ session, onBack, sale, adminSelected
                         value={item.caisse}
                         onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
                           const v = e.target.value;
-                          const available = Number((item as any).__available_stock);
                           const n = parseFloat(String(v)) || 0;
-                          if (Number.isFinite(available) && available >= 0 && n > available) {
-                            toast.error(`❌ Stock insuffisant: max ${available}`);
-                            handleItemChange(item.id, 'caisse', String(available));
-                            return;
+                          
+                          // Validate cumulative stock across all order lines for caisse
+                          if (item.product_id) {
+                            const availableStock = Number((item as any).__available_stock) || 0;
+                            const cumulativeQty = getCumulativeQuantity(item.product_id, item.id);
+                            const remainingStock = Math.max(0, availableStock - cumulativeQty);
+                            
+                            if (n > remainingStock) {
+                              toast.error(`❌ Stock insuffisant: ${availableStock} unités disponibles. ${remainingStock} restantes pour ce produit.`);
+                              handleItemChange(item.id, 'caisse', String(remainingStock));
+                              return;
+                            }
+                          } else {
+                            // Fallback to original behavior if no product_id
+                            const available = Number((item as any).__available_stock);
+                            if (Number.isFinite(available) && available >= 0 && n > available) {
+                              toast.error(`❌ Stock insuffisant: max ${available}`);
+                              handleItemChange(item.id, 'caisse', String(available));
+                              return;
+                            }
                           }
                           handleItemChange(item.id, 'caisse', v);
                         }}
@@ -1406,6 +1440,22 @@ export default function BonCommandeModule({ session, onBack, sale, adminSelected
                         value={item.quantity === 0 ? '' : item.quantity}
                         onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
                           const raw = e.target.value === '' ? 0 : parseFloat(String(e.target.value).replace(',', '.'));
+                          
+                          // Validate cumulative stock across all order lines
+                          if (item.product_id) {
+                            const remainingStock = getRemainingStock(item.product_id, item.id);
+                            const currentQuantity = Number(item.quantity) || 0;
+                            const newTotal = raw + (getCumulativeQuantity(item.product_id, item.id));
+                            const availableStock = Number((item as any).__available_stock) || 0;
+                            
+                            if (newTotal > availableStock) {
+                              toast.error(`❌ Stock insuffisant: ${availableStock} unités disponibles. ${remainingStock} restantes pour ce produit.`);
+                              const maxAllowed = Math.max(0, remainingStock);
+                              handleItemChange(item.id, 'quantity', maxAllowed);
+                              return;
+                            }
+                          }
+                          
                           handleItemChange(item.id, 'quantity', raw);
                         }}
                         onBlur={() => {
@@ -1448,6 +1498,15 @@ export default function BonCommandeModule({ session, onBack, sale, adminSelected
                       />
                     </td>
                     <td className="py-2 px-2 font-semibold">{item.subtotal.toFixed(2)} MAD</td>
+                    <td className="py-2 px-2">
+                      {item.product_id ? (
+                        <span className={`text-xs font-semibold ${getRemainingStock(item.product_id, item.id) > 0 ? 'text-green-600' : 'text-red-600'}`}>
+                        {getRemainingStock(item.product_id, item.id)}
+                      </span>
+                      ) : (
+                        <span className="text-xs text-gray-400">-</span>
+                      )}
+                    </td>
                     <td className="py-2 px-2 text-center">
                       <Button
                         onClick={() => removeItem(item.id)}

@@ -8350,6 +8350,33 @@ if (!existingInv?.id) {
       console.error('[sales PUT] sale_items insert failed:', insErr);
       }
       }
+
+      // Also update the items JSONB column for backward compatibility
+      const itemsJsonbToSave = body.items.map((item: any) => ({
+        id: item.product_id || item.id,
+        name: item.name || item.description || 'Produit',
+        quantity: parseFloat(item.quantity) || 0,
+        unitPrice: parseFloat(item.unitPrice) || parseFloat(item.unit_price) || 0,
+        subtotal: parseFloat(item.subtotal) || parseFloat(item.total_price) || 0,
+        caisse: item.caisse || item.number_of_boxes || 0,
+        moyenne: item.moyenne || item.avg_net_weight_per_box || 0,
+        reference: item.reference || null,
+        category: item.category || null,
+        lot: item.lot || null,
+        fourchette_min: item.fourchette_min || null,
+        fourchette_max: item.fourchette_max || null,
+      }));
+
+      const { error: itemsJsonbError } = await supabase
+        .from('sales')
+        .update({ items: itemsJsonbToSave })
+        .eq('id', saleId);
+
+      if (itemsJsonbError) {
+        console.error('[sales PUT] failed to update items JSONB:', itemsJsonbError);
+      } else {
+        console.log('[sales PUT] items JSONB updated successfully');
+      }
       
       // ===== Stock reconciliation on sale edit =====
       // Only reconcile if stock was already applied for this sale (marker present).
@@ -8619,7 +8646,18 @@ if (!existingInv?.id) {
         }
       }
 
-      return jsonResponse({ success: true, sale: data?.[0] });
+      // Fetch the complete sale with items to return to client
+      const { data: completeSale, error: fetchError } = await supabase
+        .from('sales')
+        .select('*, stores!sales_store_id_fkey(*), sale_items(*)')
+        .eq('id', saleId)
+        .single();
+
+      if (fetchError) {
+        console.error('[sales PUT] failed to fetch complete sale:', fetchError);
+      }
+
+      return jsonResponse({ success: true, sale: completeSale || data?.[0] });
     } catch (error: any) {
       console.error("Error updating sale:", error);
       return jsonResponse({ error: error.message }, 500);
