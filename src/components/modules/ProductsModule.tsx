@@ -640,6 +640,23 @@ export function ProductsModule({ session }: ProductsModuleProps) {
     setLoading(true);
 
     try {
+      // For single product creation (dialog form): validate against product templates
+      if (!showAddProductPage && !editingProduct) {
+        // Check if product exists in productTemplates by reference or name
+        const templateExists = productTemplates.some(
+          t => t.reference?.toLowerCase() === formData.reference?.toLowerCase() ||
+               t.name?.toLowerCase() === formData.name?.toLowerCase()
+        );
+        
+        if (!templateExists) {
+          toast.error(
+            `Produit non trouvé dans les modèles: "${formData.name || formData.reference}". Créez d'abord le produit dans Product Templates `
+          );
+          setLoading(false);
+          return;
+        }
+      }
+
       // For Add Stock page: process ALL articles, not just the first one
       if (showAddProductPage && !editingProduct) {
         // Filter articles that have at least a reference or name
@@ -675,6 +692,26 @@ export function ProductsModule({ session }: ProductsModuleProps) {
         // Create a product for EACH article
         let successCount = 0;
         let totalAmount = 0;
+
+        // Validate: Product must exist in product templates before allowing creation
+        for (let i = 0; i < validArticles.length; i++) {
+          const a = validArticles[i];
+          const refOrName = a.reference || a.name || `ligne ${i + 1}`;
+          
+          // Check if product exists in productTemplates
+          const templateExists = productTemplates.some(
+            t => t.reference?.toLowerCase() === a.reference?.toLowerCase() ||
+                 t.name?.toLowerCase() === a.name?.toLowerCase()
+          );
+          
+          if (!templateExists) {
+            toast.error(
+              `Produit non trouvé dans les modèles: "${refOrName}". Créez d'abord le produit dans Product Templates `
+            );
+            setLoading(false);
+            return;
+          }
+        }
 
         // Validate: Moyenne must be between Fourchette Min/Max (when provided)
         // Moyenne in this table is calculated as: Quantité / Caisse
