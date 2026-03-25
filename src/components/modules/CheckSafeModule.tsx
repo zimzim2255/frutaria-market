@@ -1290,6 +1290,7 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
         const reference = resolveChequeNumber(cs);
         const transferredNote = cs?.payment_transferred_note || '-';
         const createdAt = cs?.created_at ? new Date(cs.created_at).toLocaleString('fr-FR') : '-';
+        const notes = cs?.inventory_notes || cs?.notes || cs?.note || '-';
 
         return {
           index: i + 1,
@@ -1299,6 +1300,7 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
           montant: amount,
           transfere_vers: transferredNote,
           date: createdAt,
+          notes: notes,
         };
       });
 
@@ -1357,6 +1359,7 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
                   <th class="num">Montant (MAD)</th>
                   <th>Transféré vers</th>
                   <th>Date</th>
+                  <th>Notes</th>
                 </tr>
               </thead>
               <tbody>
@@ -1369,6 +1372,7 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
                     <td class="num">${r.montant.toFixed(2)}</td>
                     <td>${esc(r.transfere_vers)}</td>
                     <td>${esc(r.date)}</td>
+                    <td>${esc(r.notes)}</td>
                   </tr>
                 `).join('')}
               </tbody>
@@ -1514,7 +1518,7 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
 
       autoTable(doc, {
         startY: afterSummaryY,
-        head: [['#', 'Référence', 'Magasin', 'Statut', 'Montant (MAD)', 'Transféré vers', 'Date']],
+        head: [['#', 'Référence', 'Magasin', 'Statut', 'Montant (MAD)', 'Transféré vers', 'Date', 'Notes']],
         body: (sortedChecksSafe || []).map((cs: any, i: number) => {
           const amount = Number(cs?.amount ?? 0) || 0;
           const method = String(cs?.payment_method || cs?.method || cs?.type || 'Chèque');
@@ -1523,6 +1527,7 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
           const reference = resolveChequeNumber(cs);
           const transferredNote = cs?.payment_transferred_note || '-';
           const createdAt = cs?.created_at ? new Date(cs.created_at).toLocaleString('fr-FR') : '-';
+          const notes = cs?.inventory_notes || cs?.notes || cs?.note || '-';
           return [
             String(i + 1),
             String(reference),
@@ -1531,6 +1536,7 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
             amount.toFixed(2),
             String(transferredNote),
             String(createdAt),
+            String(notes),
           ];
         }),
         styles: { fontSize: 8 },
@@ -1575,6 +1581,7 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
         const dueDate = cs?.check_due_date ? new Date(cs.check_due_date).toLocaleDateString('fr-FR') : (cs?.due_date ? new Date(cs.due_date).toLocaleDateString('fr-FR') : '-');
         const createdAt = cs?.created_at ? new Date(cs.created_at).toLocaleDateString('fr-FR') : '-';
         const transferredNote = cs?.payment_transferred_note || '-';
+        const notes = cs?.inventory_notes || cs?.notes || cs?.note || '-';
         return [
           String(i + 1),
           String(reference),
@@ -1585,12 +1592,13 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
           String(dueDate),
           String(createdAt),
           String(transferredNote),
+          String(notes),
         ];
       });
 
       autoTable(doc, {
         startY: 40,
-        head: [['#', 'N° Chèque', 'Magasin', 'Donneur', 'Montant (MAD)', 'Statut', 'Échéance', 'Date création', 'Transféré vers']],
+        head: [['#', 'N° Chèque', 'Magasin', 'Donneur', 'Montant (MAD)', 'Statut', 'Échéance', 'Date création', 'Transféré vers', 'Notes']],
         body: checksBody,
         styles: { fontSize: 8 },
         headStyles: { fillColor: [37, 99, 235] },
@@ -1639,6 +1647,8 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
         const dueDate = cs?.check_due_date ? new Date(cs.check_due_date).toLocaleDateString('fr-FR') : (cs?.due_date ? new Date(cs.due_date).toLocaleDateString('fr-FR') : '-');
         const createdAt = cs?.created_at ? new Date(cs.created_at).toLocaleString('fr-FR') : '-';
         const transferredNote = cs?.payment_transferred_note || '-';
+        // Get notes field for export
+        const notes = cs?.inventory_notes || cs?.notes || cs?.note || '-';
 
         return {
           index: i + 1,
@@ -1650,6 +1660,7 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
           echeance: dueDate,
           date: createdAt,
           transfere_vers: transferredNote,
+          notes: notes,
         };
       });
 
@@ -1692,6 +1703,7 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
                 <th>Échéance</th>
                 <th>Date création</th>
                 <th>Transféré vers</th>
+                <th>Notes</th>
               </tr>
             </thead>
             <tbody>
@@ -1706,6 +1718,7 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
                   <td>${esc(r.echeance)}</td>
                   <td>${esc(r.date)}</td>
                   <td>${esc(r.transfere_vers)}</td>
+                  <td>${esc(r.notes)}</td>
                 </tr>
               `).join('')}
             </tbody>
