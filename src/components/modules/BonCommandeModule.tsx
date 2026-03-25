@@ -1441,41 +1441,10 @@ export default function BonCommandeModule({ session, onBack, sale, adminSelected
                         onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
                           const raw = e.target.value === '' ? 0 : parseFloat(String(e.target.value).replace(',', '.'));
                           
-                          // Validate cumulative stock across all order lines
-                          if (item.product_id) {
-                            const remainingStock = getRemainingStock(item.product_id, item.id);
-                            const currentQuantity = Number(item.quantity) || 0;
-                            const newTotal = raw + (getCumulativeQuantity(item.product_id, item.id));
-                            const availableStock = Number((item as any).__available_stock) || 0;
-                            
-                            if (newTotal > availableStock) {
-                              toast.error(`❌ Stock insuffisant: ${availableStock} unités disponibles. ${remainingStock} restantes pour ce produit.`);
-                              const maxAllowed = Math.max(0, remainingStock);
-                              handleItemChange(item.id, 'quantity', maxAllowed);
-                              return;
-                            }
-                          }
-                          
                           handleItemChange(item.id, 'quantity', raw);
                         }}
                         onBlur={() => {
-                          // Validate moyenne when leaving quantity field
-                          const caisse = parseFloat(item.caisse) || 0;
-                          const quantity = parseFloat(item.quantity.toString()) || 0;
-                          if (caisse > 0 && quantity > 0) {
-                            const calculatedMoyenne = parseFloat((quantity / caisse).toFixed(2));
-
-                            // Prefer the fourchette stored on the line item (set during product selection)
-                            // which already uses template values when available.
-                            const min = (item.fourchette_min ?? null) as any;
-                            const max = (item.fourchette_max ?? null) as any;
-
-                            if (min !== null && calculatedMoyenne < Number(min)) {
-                              toast.error(`❌ Moyenne minimale requise: ${min} (calculée: ${calculatedMoyenne})`);
-                            } else if (max !== null && calculatedMoyenne > Number(max)) {
-                              toast.error(`❌ Moyenne maximale autorisée: ${max} (calculée: ${calculatedMoyenne})`);
-                            }
-                          }
+                          // No validation for quantity field - allow any value
                         }}
                         className="h-8"
                         placeholder=""

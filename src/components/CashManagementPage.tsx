@@ -1216,7 +1216,7 @@ export function CashManagementPage({ session }: CashManagementPageProps) {
         // We use different `id` prefixes so later generic expense merge does not overwrite them.
         const passageExpenses = (filteredExpenses || []).filter((e: any) => {
           const t = norm(e?.expense_type);
-          return t === 'supplier_passage' || t === 'supplier_passage_admin_in';
+          return t === 'supplier_passage' || t === 'supplier_passage_admin_in' || t === 'supplier_passage_correction_return' || t === 'supplier_passage_correction_add';
         });
 
         passageExpenses.forEach((e: any) => {
@@ -1225,7 +1225,30 @@ export function CashManagementPage({ session }: CashManagementPageProps) {
 
           // supplier_passage: always OUT (negative)
           // supplier_passage_admin_in: always IN (positive)
-          const signedAmount = t === 'supplier_passage_admin_in' ? Math.abs(rawAmount) : -Math.abs(rawAmount);
+          // supplier_passage_correction_return: IN (positive) - money returns to payment method
+          // supplier_passage_correction_add: OUT (negative) - money taken from caisse
+          let signedAmount: number;
+          let reasonText: string;
+          let clientName: string;
+          
+          if (t === 'supplier_passage_admin_in') {
+            signedAmount = Math.abs(rawAmount);
+            reasonText = 'Entrée Admin (Passage)';
+            clientName = 'Admin';
+          } else if (t === 'supplier_passage_correction_return') {
+            signedAmount = Math.abs(rawAmount); // Positive - money returned
+            reasonText = 'Correction Passage: Retour';
+            clientName = 'Fournisseur Passage';
+          } else if (t === 'supplier_passage_correction_add') {
+            signedAmount = -Math.abs(rawAmount); // Negative - money taken from caisse
+            reasonText = 'Correction Passage: Ajout';
+            clientName = 'Fournisseur Passage';
+          } else {
+            // supplier_passage (default)
+            signedAmount = -Math.abs(rawAmount);
+            reasonText = 'Fournisseur Passage';
+            clientName = 'Fournisseur Passage';
+          }
 
           allPayments.push({
             // Ensure unique ids so they don't de-dupe with generic `expense-*` entries.
@@ -1233,12 +1256,12 @@ export function CashManagementPage({ session }: CashManagementPageProps) {
             date: e.created_at,
             store_id: e.store_id || null,
             amount: signedAmount,
-            reason: e.reason || e.category || (t === 'supplier_passage_admin_in' ? 'Entrée Admin (Passage)' : 'Fournisseur Passage'),
+            reason: e.reason || e.category || reasonText,
             source_type: 'facture',
             source_id: e.id,
             payment_method: 'cash',
             reference: e.id,
-            client_name: t === 'supplier_passage_admin_in' ? 'Admin' : 'Fournisseur Passage',
+            client_name: clientName,
             client_email: '-',
             created_by: e.created_by || null,
             created_by_email: (() => {
@@ -1473,6 +1496,7 @@ export function CashManagementPage({ session }: CashManagementPageProps) {
         
         // keep Le Charge only; exclude special flows
         if (t === 'supplier_passage' || t === 'supplier_passage_admin_in') return;
+        if (t === 'supplier_passage_correction_return' || t === 'supplier_passage_correction_add') return;
         if (caisseOutTypes.has(t)) return;
         if (cofferDepositTypes.has(t)) return;
 
@@ -1851,6 +1875,8 @@ export function CashManagementPage({ session }: CashManagementPageProps) {
     const manualChargeExpenses = (filteredExpenses || []).filter((e: any) => {
       const t = norm(e?.expense_type);
       if (t === 'supplier_passage') return false;
+      if (t === 'supplier_passage_admin_in') return false;
+      if (t === 'supplier_passage_correction_return' || t === 'supplier_passage_correction_add') return false;
       if (t.startsWith('coffer_') || t.startsWith('coffre_')) return false;
       if (t.startsWith('caisse_out_')) return false;
       if (t.startsWith('coffer_deposit_')) return false;

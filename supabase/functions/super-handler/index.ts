@@ -6971,6 +6971,163 @@ if (!existingInv?.id) {
     }
   }
 
+  // ===== Supplier Passage Correction =====
+  // POST /supplier-passages/:id/correct
+  // Corrects the amount of an existing supplier passage (passager type supplier)
+  // This also updates the mirrored payments row and creates expense adjustments for cash flow
+  if (path.startsWith("/supplier-passages/") && path.endsWith("/correct") && method === "POST") {
+    try {
+      const passageId = path.split("/")[2];
+      if (!passageId) {
+        return jsonResponse({ error: "Passage ID is required" }, 400);
+      }
+
+      const body = await req.json().catch(() => ({}));
+      const currentUser = await getCurrentUserWithRole(req);
+      if (!currentUser) return jsonResponse({ error: "Unauthorized" }, 401);
+
+      const newAmount = Number(body.new_amount);
+      if (!Number.isFinite(newAmount) || newAmount < 0) {
+        return jsonResponse({ error: "new_amount must be >= 0" }, 400);
+      }
+
+      const reason = String(body.reason || "").trim() || "Correction passage";
+
+      // Get the existing passage
+      const { data: existingPassage, error: fetchErr } = await supabase
+        .from("supplier_passages")
+        .select("*")
+        .eq("id", passageId)
+        .maybeSingle();
+
+      if (fetchErr) throw fetchErr;
+      if (!existingPassage) {
+        return jsonResponse({ error: "Passage not found" }, 404);
+      }
+
+      const currentAmount = Number(existingPassage.amount || 0);
+      const amountDiff = newAmount - currentAmount;
+      
+      // If no change, return early
+      if (amountDiff === 0) {
+        return jsonResponse({ success: true, message: "No change needed", oldAmount: currentAmount, newAmount });
+      }
+
+      // Update the passage amount
+      const { error: updateErr } = await supabase
+        .from("supplier_passages")
+        .update({
+          amount: newAmount,
+          notes: `${reason} | Ancien: ${currentAmount} | Nouveau: ${newAmount}`,
+        })
+        .eq("id", passageId);
+
+      if (updateErr) throw updateErr;
+
+      // Update the mirrored payments row (found by reference)
+      const referenceNumber = existingPassage.reference;
+      if (referenceNumber) {
+        const { error: paymentUpdateErr } = await supabase
+          .from("payments")
+          .update({
+            amount: newAmount,
+            notes: `${reason} | PASSAGE • Ancien: ${currentAmount} | Nouveau: ${newAmount}`,
+          })
+          .eq("supplier_id", existingPassage.supplier_id)
+          .eq("reference_number", referenceNumber);
+
+        if (paymentUpdateErr) {
+          console.error("Failed to update mirrored payment for passage correction:", paymentUpdateErr);
+        }
+      }
+
+      // Handle cash flow adjustments via expenses:
+      // - If amount decreased (new < old): update existing expense AND create return entry to put money back to payment method
+      // - If amount increased (new > old): update existing expense AND create addition entry to take more from caisse
+      if (amountDiff !== 0) {
+        const storeId = existingPassage.store_id;
+        const supplierId = existingPassage.supplier_id;
+        const paymentMethod = existingPassage.payment_method || 'cash';
+        
+        // 1) Find and update the existing expense entry for this passage
+        const { data: existingExpenses, error: fetchExpensesErr } = await supabase
+          .from('expenses')
+          .select('id, amount, reason')
+          .eq('expense_type', 'supplier_passage')
+          .eq('store_id', storeId)
+          .like('reason', `%Paiement Fournisseur Passage: ${supplierId}%`)
+          .order('created_at', { ascending: false })
+          .limit(1);
+
+        if (fetchExpensesErr) {
+          console.error('Failed to find existing expense for passage correction:', fetchExpensesErr);
+        }
+
+        if (existingExpenses && existingExpenses.length > 0) {
+          // Update the existing expense entry with the new amount
+          const existingExpense = existingExpenses[0];
+          const correctionNote = ` | Corrigé: Ancien ${currentAmount} → Nouveau ${newAmount} (${reason})`;
+          
+          const { error: expenseUpdateErr } = await supabase
+            .from('expenses')
+            .update({
+              amount: newAmount,
+              reason: `Paiement Fournisseur Passage: ${supplierId}${correctionNote}`,
+            })
+            .eq('id', existingExpense.id);
+
+          if (expenseUpdateErr) {
+            console.error('Failed to update existing expense for passage correction:', expenseUpdateErr);
+          }
+        }
+
+        // 2) Create cash flow adjustment entry for the difference
+        // Amount decreased (100 -> 50): return 50 to payment method (positive cash flow IN)
+        // Amount increased (100 -> 150): take 50 more from caisse (negative cash flow OUT)
+        let adjustmentExpenseType: string;
+        let adjustmentExpenseReason: string;
+        let adjustmentExpenseAmount: number;
+        
+        if (amountDiff < 0) {
+          // Amount decreased - return to payment method (money goes back to caisse)
+          adjustmentExpenseType = 'supplier_passage_correction_return';
+          adjustmentExpenseReason = `Correction passage: Retour ${Math.abs(amountDiff).toFixed(2)} MAD (${paymentMethod})`;
+          adjustmentExpenseAmount = Math.abs(amountDiff); // Positive - money returns to caisse
+        } else {
+          // Amount increased - take more from caisse
+          adjustmentExpenseType = 'supplier_passage_correction_add';
+          adjustmentExpenseReason = `Correction passage: Ajout ${amountDiff.toFixed(2)} MAD`;
+          adjustmentExpenseAmount = -amountDiff; // Negative - money taken from caisse
+        }
+
+        const { error: adjustmentErr } = await supabase
+          .from('expenses')
+          .insert([{
+            store_id: storeId,
+            amount: adjustmentExpenseAmount,
+            reason: adjustmentExpenseReason,
+            expense_type: adjustmentExpenseType,
+            created_by: currentUser.id,
+          }]);
+
+        if (adjustmentErr) {
+          console.error('Failed to create cash flow adjustment expense:', adjustmentErr);
+        }
+      }
+
+      return jsonResponse({ 
+        success: true, 
+        message: "Passage corrected successfully", 
+        oldAmount: currentAmount, 
+        newAmount,
+        amountDiff 
+      });
+    } catch (error: any) {
+      console.error("Error correcting supplier passage:", error);
+      return jsonResponse({ error: error.message }, 500);
+    }
+  }
+
   if (path === "/orders" && method === "GET") {
     try {
       const currentUser = await getCurrentUserWithRole(req);
@@ -9638,6 +9795,80 @@ if (!existingInv?.id) {
           .from("check_inventory")
           .update({ amount_used: newAmount })
           .eq("id", existingPayment.check_id);
+      }
+
+      // For passage payments (reference starts with "PASSAGE-"), also update the existing expense and create cash flow adjustment
+      const paymentRef = String(existingPayment.reference_number || "");
+      if (paymentRef.startsWith("PASSAGE-")) {
+        // This is a passage payment - update existing expense AND create cash flow adjustment
+        if (amountDiff !== 0) {
+          const storeId = existingPayment.store_id;
+          const supplierId = existingPayment.supplier_id;
+          const paymentMethod = existingPayment.payment_method || 'cash';
+          
+          // 1) Find and update the existing expense entry for this passage payment
+          const { data: existingExpenses, error: fetchExpensesErr } = await supabase
+            .from('expenses')
+            .select('id, amount, reason')
+            .eq('expense_type', 'supplier_passage')
+            .eq('store_id', storeId)
+            .like('reason', `%Paiement Fournisseur Passage: ${supplierId}%`)
+            .order('created_at', { ascending: false })
+            .limit(1);
+
+          if (fetchExpensesErr) {
+            console.error('Failed to find existing expense for passage payment correction:', fetchExpensesErr);
+          }
+
+          if (existingExpenses && existingExpenses.length > 0) {
+            // Update the existing expense entry with the new amount
+            const existingExpense = existingExpenses[0];
+            const correctionNote = ` | Corrigé: Ancien ${originalAmount} → Nouveau ${newAmount}`;
+            
+            const { error: expenseUpdateErr } = await supabase
+              .from('expenses')
+              .update({
+                amount: newAmount,
+                reason: `Paiement Fournisseur Passage: ${supplierId}${correctionNote}`,
+              })
+              .eq('id', existingExpense.id);
+
+            if (expenseUpdateErr) {
+              console.error('Failed to update existing expense for passage payment correction:', expenseUpdateErr);
+            }
+          }
+
+          // 2) Create cash flow adjustment entry for the difference
+          // Amount decreased: return money to payment method (positive cash flow IN)
+          // Amount increased: take more from caisse (negative cash flow OUT)
+          let adjustmentExpenseType: string;
+          let adjustmentExpenseReason: string;
+          let adjustmentExpenseAmount: number;
+          
+          if (amountDiff < 0) {
+            adjustmentExpenseType = 'supplier_passage_correction_return';
+            adjustmentExpenseReason = `Correction paiement passage: Retour ${Math.abs(amountDiff).toFixed(2)} MAD (${paymentMethod})`;
+            adjustmentExpenseAmount = Math.abs(amountDiff);
+          } else {
+            adjustmentExpenseType = 'supplier_passage_correction_add';
+            adjustmentExpenseReason = `Correction paiement passage: Ajout ${amountDiff.toFixed(2)} MAD`;
+            adjustmentExpenseAmount = -amountDiff;
+          }
+
+          const { error: adjustmentErr } = await supabase
+            .from('expenses')
+            .insert([{
+              store_id: storeId,
+              amount: adjustmentExpenseAmount,
+              reason: adjustmentExpenseReason,
+              expense_type: adjustmentExpenseType,
+              created_by: currentUser.id,
+            }]);
+
+          if (adjustmentErr) {
+            console.error('Failed to create cash flow adjustment expense for passage payment:', adjustmentErr);
+          }
+        }
       }
 
       return jsonResponse({ success: true, message: "Payment corrected successfully", oldAmount: originalAmount, newAmount });

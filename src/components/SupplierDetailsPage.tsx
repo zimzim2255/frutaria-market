@@ -1389,13 +1389,27 @@ export function SupplierDetailsPage({ supplier, session, onBack, onSupplierUpdat
     // Supplier "paid" must include BOTH:
     // - global payments (payments table)
     // - supplier advances (supplier_advances table)
-    const totalFacture = Number((supplier as any)?.balance || 0) || 0;
+    // IMPORTANT: Calculate totalFacture from the rows (Achat type) instead of supplier.balance
+    // as supplier.balance may be stale or not properly updated for all supplier types
+    const totalFactureFromRows = rowsForExport
+      .filter((r: any) => r._type === 'Achat')
+      .reduce((sum: number, r: any) => sum + (Number(r._amount) || 0), 0);
+    // Also include admin supplier invoices in total facturé if any
+    const totalFromAdminInvoices = (adminSupplierInvoices || []).reduce(
+      (sum: number, inv: any) => sum + (Number(inv.total_amount || inv.amount || 0) || 0),
+      0
+    );
+    const totalFacture = totalFactureFromRows + totalFromAdminInvoices;
     const totalPaidPayments = paymentsForExport.reduce((sum: number, p: any) => sum + (Number(p.amount) || 0), 0);
     const totalPaidAdvances = advancesForExport.reduce((sum: number, a: any) => sum + (Number(a.amount) || 0), 0);
     const totalPaid = totalPaidPayments + totalPaidAdvances;
+    
+    // NOTE: Remise (discounts) are already included in the rows as negative amounts.
+    // Do NOT subtract them again in Solde Restant to avoid double-counting.
+    // The totalRemise is kept for display purposes only.
     const totalRemise = (supplierDiscounts || []).reduce((sum: number, d: any) => sum + (Number(d?.amount || 0) || 0), 0);
-    // IMPORTANT: allow negative (supplier credit) when overpaid.
-    const soldeRestant = totalFacture - totalPaid - totalRemise;
+    // Solde Restant = Total Facturé - Total Paid (remise already reflected in rows)
+    const soldeRestant = totalFacture - totalPaid;
 
     // Extra totals (informational only)
     const totalAdvances = advancesForExport.reduce((sum: number, a: any) => sum + (Number(a.amount) || 0), 0);
