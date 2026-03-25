@@ -1241,11 +1241,13 @@ export function SupplierDetailsPage({ supplier, session, onBack, onSupplierUpdat
       const rawDate = p.payment_date || p.created_at;
       rows.push({
         _type: 'Paiement',
+        _isPayment: true,
         _sort: sortTime(rawDate),
         _dateStr: fmtDateTime(rawDate),
         _amount: Number(p.amount || 0) || 0,
         _method: String(p.payment_method || p.method || p.type || '-'),
-        _reference: p.reference_number || p.reference || '-',
+        _reference: '-',
+        _paymentReference: p.reference_number || p.reference || '-',
         _coffer: '-',
         _actor: p.created_by_email || p.created_by || '-',
         _notes: p.notes || '-',
@@ -1258,11 +1260,13 @@ export function SupplierDetailsPage({ supplier, session, onBack, onSupplierUpdat
       const rawDate = a.created_at;
       rows.push({
         _type: 'Avance',
+        _isPayment: true,
         _sort: sortTime(rawDate),
         _dateStr: fmtDateTime(rawDate),
         _amount: Number(a.amount || 0) || 0,
         _method: String(a.payment_method || '-'),
         _reference: '-',
+        _paymentReference: '-',
         _coffer: a.coffer_name || a.coffer_id || '-',
         _actor: (`${a.created_by_role || ''}${a.created_by_email ? ` • ${a.created_by_email}` : ''}`.trim() || a.created_by_email || a.created_by || '-'),
         _notes: a.notes || '-',
@@ -1337,11 +1341,13 @@ export function SupplierDetailsPage({ supplier, session, onBack, onSupplierUpdat
       Array.from(groups.entries()).forEach(([stockRef, g]) => {
         rows.push({
           _type: 'Achat',
+          _isPayment: false,
           _sort: sortTime(g.rawDate),
           _dateStr: fmtDateTime(g.rawDate),
           _amount: g.val,
           _method: 'STOCK',
           _reference: stockRef,
+          _paymentReference: '-',
           _coffer: '-',
           _actor: g.actor || '-',
           _notes: g.notes || `Achat stock (${stockRef})`,
@@ -1370,12 +1376,14 @@ export function SupplierDetailsPage({ supplier, session, onBack, onSupplierUpdat
 
       rows.push({
         _type: 'Remise',
+        _isPayment: true,
         _sort: sortTime(rawDate),
         _dateStr: fmtDateTime(rawDate),
         // remise is a negative movement
         _amount: -Math.abs(amount),
         _method: 'REMISE',
-        _reference: String(ref),
+        _reference: '-',
+        _paymentReference: String(ref),
         _coffer: '-',
         _actor: actor,
         _notes: notes,
@@ -1491,9 +1499,10 @@ export function SupplierDetailsPage({ supplier, session, onBack, onSupplierUpdat
               <thead class="header">
                 <tr>
                   <th>Date</th>
-                  <th>Référence</th>
-                  <th>Montant</th>
                   <th>Type</th>
+                  <th>Référence</th>
+                  <th>Montant Achat</th>
+                  <th>Montant Paiement</th>
                   <th>Méthode</th>
                   <th>Coffre</th>
                   <th>Effectué par</th>
@@ -1507,9 +1516,10 @@ export function SupplierDetailsPage({ supplier, session, onBack, onSupplierUpdat
                     return `
                       <tr>
                         <td>${r._dateStr}</td>
-                        <td>${r._reference}</td>
-                        <td class="right">${money(r._amount)}</td>
-                        <td class="center">${r._type}</td>
+                        <td>${r._type || '-'}</td>
+                        <td>${(r._reference && r._reference !== '-') ? r._reference : (r._paymentReference && r._paymentReference !== '-') ? r._paymentReference : '-'}</td>
+                        <td class="right">${r._type === 'Achat' ? money(r._amount) : '-'}</td>
+                        <td class="right">${r._isPayment ? money(r._amount) : '-'}</td>
                         <td class="center">${r._method}</td>
                         <td class="center">${r._coffer}</td>
                         <td>${r._actor}</td>
@@ -1521,7 +1531,8 @@ export function SupplierDetailsPage({ supplier, session, onBack, onSupplierUpdat
                   .join('')}
 
                 <tr class="total-row">
-                  <td colspan="2">TOTALE (MOUVEMENTS PÉRIODE)</td>
+                  <td colspan="1">TOTALE (MOUVEMENTS PÉRIODE)</td>
+                  <td colspan="2"></td>
                   <td class="right">${money(totalAllMovements)}</td>
                   <td colspan="5"></td>
                 </tr>
@@ -1969,28 +1980,30 @@ export function SupplierDetailsPage({ supplier, session, onBack, onSupplierUpdat
 
       const afterFilterY = (doc as any).lastAutoTable?.finalY || afterSummaryY + 10;
 
-      const body = rowsForExport.map((r: any) => ([
+      const body = rowsForExport.map((r: any) => [
         r._dateStr,
-        r._reference,
-        money(r._amount),
-        r._type,
+        r._type || '-',
+        (r._reference && r._reference !== '-') ? r._reference : (r._paymentReference && r._paymentReference !== '-') ? r._paymentReference : '-',
+        r._type === 'Achat' ? money(r._amount) : '-',
+        r._isPayment ? money(r._amount) : '-',
         r._method,
         r._coffer,
         r._actor,
         money(r._remise || 0),
         r._notes,
-      ]));
+      ]);
 
       (doc as any).autoTable({
         startY: afterFilterY + 4,
         theme: 'grid',
-        tableWidth: 250,
-        margin: { left: 20 },
+        tableWidth: 280,
+        margin: { left: 10 },
         head: [[
           'DATE',
-          'REFERENCE',
-          'MONTANT',
           'TYPE',
+          'REFERENCE',
+          'MONTANT ACHAT',
+          'MONTANT PAIEMENT',
           'METHODE',
           'COFFRE',
           'EFFECTUE PAR',
@@ -2012,15 +2025,16 @@ export function SupplierDetailsPage({ supplier, session, onBack, onSupplierUpdat
           halign: 'center',
         },
         columnStyles: {
-          0: { cellWidth: 34 },
-          1: { cellWidth: 32 },
-          2: { cellWidth: 28, halign: 'right' },
-          3: { cellWidth: 18, halign: 'center' },
-          4: { cellWidth: 22, halign: 'center' },
-          5: { cellWidth: 22, halign: 'center' },
-          6: { cellWidth: 46 },
-          7: { cellWidth: 22, halign: 'right' },
-          8: { cellWidth: 48 },
+          0: { cellWidth: 25 },
+          1: { cellWidth: 20 },
+          2: { cellWidth: 28 },
+          3: { cellWidth: 24, halign: 'right' },
+          4: { cellWidth: 24, halign: 'right' },
+          5: { cellWidth: 18, halign: 'center' },
+          6: { cellWidth: 25 },
+          7: { cellWidth: 28 },
+          8: { cellWidth: 28, halign: 'right' },
+          9: { cellWidth: 35 },
         },
         });
 

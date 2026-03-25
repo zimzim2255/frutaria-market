@@ -7090,13 +7090,11 @@ if (!existingInv?.id) {
         if (existingExpenses && existingExpenses.length > 0) {
           // Update the existing expense entry with the new amount
           const existingExpense = existingExpenses[0];
-          const correctionNote = ` | Corrigé: Ancien ${currentAmount} → Nouveau ${newAmount} (${reason})`;
-          
           const { error: expenseUpdateErr } = await supabase
             .from('expenses')
             .update({
               amount: newAmount,
-              reason: `Paiement Fournisseur Passage: ${supplierId}${correctionNote}`,
+              reason: `Paiement Fournisseur Passage: ${supplierId}`,
             })
             .eq('id', existingExpense.id);
 
@@ -9847,13 +9845,11 @@ if (!existingInv?.id) {
           if (existingExpenses && existingExpenses.length > 0) {
             // Update the existing expense entry with the new amount
             const existingExpense = existingExpenses[0];
-            const correctionNote = ` | Corrigé: Ancien ${originalAmount} → Nouveau ${newAmount}`;
-            
             const { error: expenseUpdateErr } = await supabase
               .from('expenses')
               .update({
                 amount: newAmount,
-                reason: `Paiement Fournisseur Passage: ${supplierId}${correctionNote}`,
+                reason: `Paiement Fournisseur Passage: ${supplierId}`,
               })
               .eq('id', existingExpense.id);
 

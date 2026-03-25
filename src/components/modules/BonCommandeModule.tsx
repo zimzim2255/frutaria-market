@@ -581,11 +581,21 @@ export default function BonCommandeModule({ session, onBack, sale, adminSelected
     return (refKey ? templateByReference.get(refKey) : null) || null;
   };
 
-  // Calculate cumulative quantity for a product across all order lines
+  // Calculate cumulative quantity (quantite) for a product across all order lines
   const getCumulativeQuantity = (productId: string, currentItemId: string): number => {
     return orderData.items.reduce((sum, item) => {
       if (item.product_id === productId && item.id !== currentItemId) {
         return sum + (Number(item.quantity) || 0);
+      }
+      return sum;
+    }, 0);
+  };
+
+  // Calculate cumulative caisse for a product across all order lines
+  const getCumulativeCaisse = (productId: string, currentItemId: string): number => {
+    return orderData.items.reduce((sum, item) => {
+      if (item.product_id === productId && item.id !== currentItemId) {
+        return sum + (parseFloat(String(item.caisse).replace(',', '.')) || 0);
       }
       return sum;
     }, 0);
@@ -1391,8 +1401,8 @@ export default function BonCommandeModule({ session, onBack, sale, adminSelected
                           // Validate cumulative stock across all order lines for caisse
                           if (item.product_id) {
                             const availableStock = Number((item as any).__available_stock) || 0;
-                            const cumulativeQty = getCumulativeQuantity(item.product_id, item.id);
-                            const remainingStock = Math.max(0, availableStock - cumulativeQty);
+                            const cumulativeCaisse = getCumulativeCaisse(item.product_id, item.id);
+                            const remainingStock = Math.max(0, availableStock - cumulativeCaisse);
                             
                             if (n > remainingStock) {
                               toast.error(`❌ Stock insuffisant: ${availableStock} unités disponibles. ${remainingStock} restantes pour ce produit.`);

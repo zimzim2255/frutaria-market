@@ -532,20 +532,24 @@ export function ProductTemplatesModule({ session }: ProductTemplatesModuleProps)
                       placeholder="Ex: PROD-001, SKU-ABC123..."
                       className="flex-1"
                       required
+                      disabled={!!editingTemplate}
+                      readOnly={!!editingTemplate}
                     />
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const timestamp = Date.now().toString().slice(-6);
-                        const randomNum = Math.floor(Math.random() * 1000);
-                        const newRef = `P${timestamp}${randomNum}`;
-                        setFormData({ ...formData, reference: newRef });
-                      }}
-                      className="px-3 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-md font-semibold text-sm whitespace-nowrap transition"
-                      title="Générer une référence"
-                    >
-                      🔄
-                    </button>
+                    {!editingTemplate && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const timestamp = Date.now().toString().slice(-6);
+                          const randomNum = Math.floor(Math.random() * 1000);
+                          const newRef = `P${timestamp}${randomNum}`;
+                          setFormData({ ...formData, reference: newRef });
+                        }}
+                        className="px-3 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-md font-semibold text-sm whitespace-nowrap transition"
+                        title="Générer une référence"
+                      >
+                        🔄 Auto génèré
+                      </button>
+                    )}
                   </div>
                 </div>
 
