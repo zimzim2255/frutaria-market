@@ -42,6 +42,7 @@ export function StockReferenceExportButtons(props: {
 
   const totalQty = (rows || []).reduce((s, r) => s + asNumber((r as any)?.number_of_boxes ?? 0), 0);
   const totalValue = (rows || []).reduce((s, r) => s + (asNumber((r as any)?.number_of_boxes ?? 0) * asNumber((r as any)?.purchase_price ?? 0)), 0);
+  const totalCaisse = (rows || []).reduce((s, r) => s + asNumber((r as any)?.caisse ?? 0), 0);
 
   const columns: TableColumn<StockReferenceExportRow>[] = [
     { header: 'Référence', accessor: (r) => String(r?.reference || '-') },
@@ -52,7 +53,14 @@ export function StockReferenceExportButtons(props: {
     { header: 'Prix Achat\n(MAD)', accessor: (r) => asNumber((r as any)?.purchase_price ?? 0).toFixed(2), align: 'right', cellWidth: 18 },
     {
       header: 'Valeur\n(MAD)',
-      accessor: (r) => (asNumber((r as any)?.number_of_boxes ?? 0) * asNumber((r as any)?.purchase_price ?? 0)).toFixed(2),
+      accessor: (r) => {
+        // Check for custom _totalValue field (used in total row)
+        const totalVal = (r as any)?._totalValue;
+        if (totalVal !== undefined) {
+          return totalVal.toFixed(2);
+        }
+        return (asNumber((r as any)?.number_of_boxes ?? 0) * asNumber((r as any)?.purchase_price ?? 0)).toFixed(2);
+      },
       align: 'right',
       cellWidth: 18,
     },
@@ -69,6 +77,7 @@ export function StockReferenceExportButtons(props: {
         filename: `Rapport_Reference_Stock_${safeRef}_${datePart}.pdf`,
         headerStats: [
           { label: 'PRODUITS', value: String((rows || []).length) },
+          { label: 'TOTAL CAISSE', value: totalCaisse.toFixed(1) },
           { label: 'QUANTITÉ', value: totalQty.toFixed(1) },
           { label: 'VALEUR', value: `${totalValue.toFixed(2)} MAD` },
         ],
@@ -86,7 +95,24 @@ export function StockReferenceExportButtons(props: {
   const exportExcel = () => {
     try {
       if (!ref) return;
-      exportToExcelHtml(rows || [], columns, `Rapport_Reference_Stock_${safeRef}_${datePart}.xls`);
+
+      // Add total row at the end for Excel export with calculated Valeur
+      const rowsWithTotal = rows ? [
+        ...rows,
+        {
+          reference: 'TOTAL',
+          name: '',
+          category: '',
+          caisse: totalCaisse,
+          number_of_boxes: totalQty,
+          purchase_price: '', // Leave blank, Valeur will be calculated
+          lot: '',
+          created_at: '',
+          _totalValue: totalValue, // Custom field for calculation
+        } as StockReferenceExportRow & { _totalValue?: number }
+      ] : [];
+
+      exportToExcelHtml(rowsWithTotal, columns, `Rapport_Reference_Stock_${safeRef}_${datePart}.xls`);
       toast.success('Excel exporté');
     } catch (e) {
       console.error('[StockReferenceExportButtons] exportExcel error', e);

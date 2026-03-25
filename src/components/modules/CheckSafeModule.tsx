@@ -137,6 +137,7 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
   const [depositReference, setDepositReference] = useState('');
   const [depositNotes, setDepositNotes] = useState('');
   const [depositSubmitting, setDepositSubmitting] = useState(false);
+  const [depositDate, setDepositDate] = useState<string>('');
 
   // NEW: Versement (direct to Coffre, no caisse deduction)
   const [versementDialogOpen, setVersementDialogOpen] = useState(false);
@@ -146,6 +147,7 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
   const [versementReference, setVersementReference] = useState('');
   const [versementNotes, setVersementNotes] = useState('');
   const [versementSubmitting, setVersementSubmitting] = useState(false);
+  const [versementDate, setVersementDate] = useState<string>('');
 
   // Coffer management state
   const [coffers, setCoffers] = useState<Coffer[]>([]);
@@ -190,6 +192,7 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
   const [cofferExpenseAmount, setCofferExpenseAmount] = useState('');
   const [cofferExpenseReason, setCofferExpenseReason] = useState('');
   const [cofferExpenseProofFile, setCofferExpenseProofFile] = useState<File | null>(null);
+  const [cofferExpenseDate, setCofferExpenseDate] = useState<string>('');
   const [cofferExpenseSubmitting, setCofferExpenseSubmitting] = useState(false);
   const [cofferExpenseCategories, setCofferExpenseCategories] = useState<any[]>([]);
   const [cofferExpenseCategorySearch, setCofferExpenseCategorySearch] = useState('');
@@ -2830,6 +2833,15 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
                   />
                 </div>
 
+                <div className="space-y-2">
+                  <Label>Date du Versement (optionnel)</Label>
+                  <Input
+                    type="date"
+                    value={versementDate}
+                    onChange={(e) => setVersementDate(e.target.value)}
+                  />
+                </div>
+
                 <div className="flex justify-end gap-2 pt-2">
                   <Button
                     variant="outline"
@@ -2870,6 +2882,7 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
                           method: versementMethod,
                           reason: versementReason || null,
                           notes: combinedNotes || null,
+                          payment_date: versementDate || null,
                         };
 
                         const res = await fetch(
@@ -2897,6 +2910,7 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
                         setVersementReason('');
                         setVersementNotes('');
                         setVersementMethod('cash');
+                        setVersementDate('');
 
                         // Refresh history
                         fetchCofferMovements(selectedCofferId);
@@ -2998,6 +3012,15 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
                   />
                 </div>
 
+                <div className="space-y-2">
+                  <Label>Date du Versement (optionnel)</Label>
+                  <Input
+                    type="date"
+                    value={depositDate}
+                    onChange={(e) => setDepositDate(e.target.value)}
+                  />
+                </div>
+
                 <div className="flex justify-end gap-2 pt-2">
                   <Button
                     variant="outline"
@@ -3038,6 +3061,7 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
                           method: depositMethod,
                           reason: depositReason || null,
                           notes: combinedNotes || null,
+                          payment_date: depositDate || null,
                         };
 
                         
@@ -3068,6 +3092,7 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
                         setDepositReason('');
                         setDepositNotes('');
                         setDepositMethod('cash');
+                        setDepositDate('');
 
                         // Refresh history
                         fetchCofferMovements(selectedCofferId);
@@ -3814,6 +3839,7 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
                         proof_file: base64String,
                         proof_file_type: proofFileType,
                         proof_file_name: proofFileName,
+                        payment_date: cofferExpenseDate || null,
                       }),
                     }
                   );
@@ -3924,6 +3950,17 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
                   <p className="text-xs text-gray-500">JPG, PNG ou PDF (Max 10MB) - Optionnel</p>
                 </div>
 
+                {/* Date */}
+                <div className="space-y-2">
+                  <Label htmlFor="coffer_expense_date">Date de la Dépense (optionnel)</Label>
+                  <Input
+                    id="coffer_expense_date"
+                    type="date"
+                    value={cofferExpenseDate}
+                    onChange={(e) => setCofferExpenseDate(e.target.value)}
+                  />
+                </div>
+
                 {/* Action Buttons */}
                 <div className="flex justify-end gap-2 pt-4">
                   <Button
@@ -3934,6 +3971,7 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
                       setCofferExpenseAmount('');
                       setCofferExpenseReason('');
                       setCofferExpenseProofFile(null);
+                      setCofferExpenseDate('');
                     }}
                   >
                     Annuler

@@ -1558,8 +1558,8 @@ async function handler(req: Request): Promise<Response> {
 
       // moyenne = quantite / caisse (when caisse > 0)
       patch.moyenne = nextCaisse > 0 ? round2(nextQuantite / nextCaisse) : 0;
-      // total_value = caisse * purchase_price
-      patch.total_value = round2(nextCaisse * nextPurchase);
+      // total_value = quantite * purchase_price (correct formula)
+      patch.total_value = round2(nextQuantite * nextPurchase);
 
       const { data: updated, error: upErr } = await supabase
         .from('product_additions_history')
@@ -1568,6 +1568,28 @@ async function handler(req: Request): Promise<Response> {
         .select('*')
         .maybeSingle();
       if (upErr) throw upErr;
+
+      // After updating the row, recalculate supplier's balance (Total Facturé) if purchase_price or quantite changed
+      const hasPriceOrQuantityChange = patch.purchase_price !== undefined || patch.quantite !== undefined;
+      if (hasPriceOrQuantityChange && updated?.supplier_id) {
+        // Calculate new total_achat for this supplier: SUM(quantite * purchase_price)
+        const { data: allRows, error: fetchErr } = await supabase
+          .from('product_additions_history')
+          .select('quantite, purchase_price')
+          .eq('supplier_id', updated.supplier_id);
+        if (fetchErr) console.error('Error fetching rows for supplier balance recalc:', fetchErr);
+        
+        const newTotalAchat = round2(
+          (allRows || []).reduce((sum: number, r: any) => sum + (toNum(r?.quantite ?? 0) * toNum(r?.purchase_price ?? 0)), 0)
+        );
+        
+        // Update supplier's balance
+        const { error: supErr } = await supabase
+          .from('suppliers')
+          .update({ balance: newTotalAchat })
+          .eq('id', updated.supplier_id);
+        if (supErr) console.error('Error updating supplier balance:', supErr);
+      }
 
       return jsonResponse({ success: true, row: updated });
     } catch (error: any) {
@@ -4395,6 +4417,7 @@ async function handler(req: Request): Promise<Response> {
         // expenses.reason is NOT NULL in schema
         reason: title || defaultReason,
         created_by: currentUser.id,
+        payment_date: body.payment_date ? String(body.payment_date) : null,
       };
 
       const tryRowWithNotes: any = {
@@ -4437,6 +4460,7 @@ async function handler(req: Request): Promise<Response> {
             expense_type: caisseOutExpenseType,
             reason: `Versement au coffre (${method}) → ${cofferId}`,
             created_by: currentUser.id,
+            payment_date: body.payment_date ? String(body.payment_date) : null,
           };
 
           const caisseRowWithNotes: any = {
@@ -12598,6 +12622,7 @@ if (!existingInv?.id) {
   proof_file_name: body.proof_file_name || null,
   expense_type: expenseType,
   created_by: currentUser.id,
+  payment_date: body.payment_date ? String(body.payment_date) : null,
   },
   ])
   .select();
