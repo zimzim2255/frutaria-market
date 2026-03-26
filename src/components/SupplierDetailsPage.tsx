@@ -1,5 +1,35 @@
 import { useEffect, useMemo, useState } from 'react';
 import { projectId } from '../utils/supabase/info';
+
+// Helper function to convert UUID-based references to human-readable format
+function formatReference(ref: string | null | undefined): string {
+  if (!ref) return '-';
+  const str = String(ref).trim();
+  if (!str) return '-';
+  
+  // Handle PASSAGE-<uuid>-<timestamp> format
+  if (str.startsWith('PASSAGE-')) {
+    const parts = str.split('-');
+    if (parts.length >= 3) {
+      // Extract the timestamp (last part)
+      const timestamp = parts[parts.length - 1];
+      // Use last 6 digits of timestamp for a simple reference
+      const shortRef = timestamp.slice(-6);
+      return `PASSAGE-${shortRef}`;
+    }
+    return str;
+  }
+  
+  // Handle pure UUID format (8-4-4-4-12 characters)
+  const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (uuidPattern.test(str)) {
+    // Use first 8 characters of UUID for a simple reference
+    return str.substring(0, 8);
+  }
+  
+  // Return as-is if it's already a simple reference
+  return str;
+}
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
@@ -2141,7 +2171,7 @@ export function SupplierDetailsPage({ supplier, session, onBack, onSupplierUpdat
 
             <div className="px-5 py-4 space-y-4">
               <div className="text-xs text-gray-600">
-                Réf: <span className="font-mono">{String(selectedPaymentForCorrection?.reference_number || selectedPaymentForCorrection?.reference || selectedPaymentForCorrection?.id || '-')}</span>
+                Réf: <span className="font-mono" title={String(selectedPaymentForCorrection?.reference_number || selectedPaymentForCorrection?.reference || selectedPaymentForCorrection?.id || '-')}>{formatReference(selectedPaymentForCorrection?.reference_number || selectedPaymentForCorrection?.reference || selectedPaymentForCorrection?.id)}</span>
                 <span className="mx-2">•</span>
                 Ancien montant: <span className="font-semibold">{(Number(selectedPaymentForCorrection?.amount || 0) || 0).toFixed(2)} MAD</span>
               </div>
@@ -2293,7 +2323,7 @@ export function SupplierDetailsPage({ supplier, session, onBack, onSupplierUpdat
 
             <div className="px-5 py-4 space-y-4">
               <div className="text-xs text-gray-600">
-                Réf: <span className="font-mono">{String(selectedInvoiceForCorrection?.stock_reference || selectedInvoiceForCorrection?.reference || selectedInvoiceForCorrection?.id || '-')}</span>
+                Réf: <span className="font-mono" title={String(selectedInvoiceForCorrection?.stock_reference || selectedInvoiceForCorrection?.reference || selectedInvoiceForCorrection?.id || '-')}>{formatReference(selectedInvoiceForCorrection?.stock_reference || selectedInvoiceForCorrection?.reference || selectedInvoiceForCorrection?.id)}</span>
                 <span className="mx-2">•</span>
                 Ancien montant: <span className="font-semibold">{(Number(selectedInvoiceForCorrection?.amount || selectedInvoiceForCorrection?.total_amount || 0) || 0).toFixed(2)} MAD</span>
               </div>
@@ -2369,7 +2399,7 @@ export function SupplierDetailsPage({ supplier, session, onBack, onSupplierUpdat
 
             <div className="px-5 py-4 space-y-4">
               <div className="text-xs text-gray-600">
-                Réf: <span className="font-mono">{String(selectedDiscountForCorrection?.reference || selectedDiscountForCorrection?.id || '-')}</span>
+                Réf: <span className="font-mono" title={String(selectedDiscountForCorrection?.reference || selectedDiscountForCorrection?.id || '-')}>{formatReference(selectedDiscountForCorrection?.reference || selectedDiscountForCorrection?.id)}</span>
                 <span className="mx-2">•</span>
                 Ancien montant: <span className="font-semibold">{(Math.abs(Number(selectedDiscountForCorrection?.amount || selectedDiscountForCorrection?.discount_amount || 0)) || 0).toFixed(2)} MAD</span>
               </div>
@@ -3001,7 +3031,7 @@ export function SupplierDetailsPage({ supplier, session, onBack, onSupplierUpdat
                               <Badge className={typeBadgeClass}>{row.__type}</Badge>
                             </TableCell>
                             <TableCell className="text-sm">{String(row.payment_method || '-')}</TableCell>
-                            <TableCell className="text-sm font-mono">{String(row.reference || '-')}</TableCell>
+                            <TableCell className="text-sm font-mono" title={String(row.reference || '-')}>{formatReference(row.reference)}</TableCell>
                             <TableCell className="text-sm break-all">{String(row.actor || '-')}</TableCell>
                             <TableCell className="text-sm text-gray-700 max-w-xs">
                               <div className="truncate" title={String(row.notes || '-')}>{String(row.notes || '-')}</div>
@@ -3153,7 +3183,7 @@ export function SupplierDetailsPage({ supplier, session, onBack, onSupplierUpdat
                             <TableCell className="text-sm font-medium">{dateStr}</TableCell>
                             <TableCell className="font-semibold text-orange-700">{Number(p.amount || 0).toFixed(2)} MAD</TableCell>
                             <TableCell className="text-sm">{method}</TableCell>
-                            <TableCell className="text-sm font-mono">{ref}</TableCell>
+                            <TableCell className="text-sm font-mono" title={ref}>{formatReference(ref)}</TableCell>
                             <TableCell className="text-sm break-all">{actor}</TableCell>
                             <TableCell className="text-sm text-gray-700 max-w-xs">
                               <div className="truncate" title={notes}>{notes}</div>

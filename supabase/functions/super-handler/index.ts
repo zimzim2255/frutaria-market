@@ -4872,15 +4872,11 @@ async function handler(req: Request): Promise<Response> {
       // Determine effective store scope.
       // IMPORTANT FIX:
       // - Admin should be able to see advances for the selected magasin.
-      // - If admin didn't pass store_id, fall back to their own users.store_id (matches UI default selection).
+      // - If admin didn't pass store_id, they should see ALL advances from all stores.
+      // - Non-admin users can only see advances from their own store.
       const effectiveStoreId = currentUser.role === "admin"
-        ? (requestedStoreId || (currentUser.store_id ? String(currentUser.store_id) : null))
-        : (currentUser.store_id ? String(currentUser.store_id) : null);
-
-      // If admin has no store_id and didn't select one, return empty (avoid cross-store leakage)
-      if (currentUser.role === "admin" && !effectiveStoreId) {
-        return jsonResponse({ advances: [] });
-      }
+        ? (requestedStoreId || null)  // Admin: use requested store_id or null (see all)
+        : (currentUser.store_id ? String(currentUser.store_id) : null);  // Non-admin: use their store_id
 
       // Base query
       let q = supabase
@@ -4889,6 +4885,7 @@ async function handler(req: Request): Promise<Response> {
         .order("created_at", { ascending: false });
 
       if (supplierId) q = q.eq("supplier_id", supplierId);
+      // Only filter by store_id if effectiveStoreId is set (admin can see all when null)
       if (effectiveStoreId) q = q.eq("store_id", effectiveStoreId);
 
       const { data, error } = await q;
@@ -7101,39 +7098,6 @@ if (!existingInv?.id) {
           if (expenseUpdateErr) {
             console.error('Failed to update existing expense for passage correction:', expenseUpdateErr);
           }
-        }
-
-        // 2) Create cash flow adjustment entry for the difference
-        // Amount decreased (100 -> 50): return 50 to payment method (positive cash flow IN)
-        // Amount increased (100 -> 150): take 50 more from caisse (negative cash flow OUT)
-        let adjustmentExpenseType: string;
-        let adjustmentExpenseReason: string;
-        let adjustmentExpenseAmount: number;
-        
-        if (amountDiff < 0) {
-          // Amount decreased - return to payment method (money goes back to caisse)
-          adjustmentExpenseType = 'supplier_passage_correction_return';
-          adjustmentExpenseReason = `Correction passage: Retour ${Math.abs(amountDiff).toFixed(2)} MAD (${paymentMethod})`;
-          adjustmentExpenseAmount = Math.abs(amountDiff); // Positive - money returns to caisse
-        } else {
-          // Amount increased - take more from caisse
-          adjustmentExpenseType = 'supplier_passage_correction_add';
-          adjustmentExpenseReason = `Correction passage: Ajout ${amountDiff.toFixed(2)} MAD`;
-          adjustmentExpenseAmount = -amountDiff; // Negative - money taken from caisse
-        }
-
-        const { error: adjustmentErr } = await supabase
-          .from('expenses')
-          .insert([{
-            store_id: storeId,
-            amount: adjustmentExpenseAmount,
-            reason: adjustmentExpenseReason,
-            expense_type: adjustmentExpenseType,
-            created_by: currentUser.id,
-          }]);
-
-        if (adjustmentErr) {
-          console.error('Failed to create cash flow adjustment expense:', adjustmentErr);
         }
       }
 
@@ -9856,37 +9820,6 @@ if (!existingInv?.id) {
             if (expenseUpdateErr) {
               console.error('Failed to update existing expense for passage payment correction:', expenseUpdateErr);
             }
-          }
-
-          // 2) Create cash flow adjustment entry for the difference
-          // Amount decreased: return money to payment method (positive cash flow IN)
-          // Amount increased: take more from caisse (negative cash flow OUT)
-          let adjustmentExpenseType: string;
-          let adjustmentExpenseReason: string;
-          let adjustmentExpenseAmount: number;
-          
-          if (amountDiff < 0) {
-            adjustmentExpenseType = 'supplier_passage_correction_return';
-            adjustmentExpenseReason = `Correction paiement passage: Retour ${Math.abs(amountDiff).toFixed(2)} MAD (${paymentMethod})`;
-            adjustmentExpenseAmount = Math.abs(amountDiff);
-          } else {
-            adjustmentExpenseType = 'supplier_passage_correction_add';
-            adjustmentExpenseReason = `Correction paiement passage: Ajout ${amountDiff.toFixed(2)} MAD`;
-            adjustmentExpenseAmount = -amountDiff;
-          }
-
-          const { error: adjustmentErr } = await supabase
-            .from('expenses')
-            .insert([{
-              store_id: storeId,
-              amount: adjustmentExpenseAmount,
-              reason: adjustmentExpenseReason,
-              expense_type: adjustmentExpenseType,
-              created_by: currentUser.id,
-            }]);
-
-          if (adjustmentErr) {
-            console.error('Failed to create cash flow adjustment expense for passage payment:', adjustmentErr);
           }
         }
       }
