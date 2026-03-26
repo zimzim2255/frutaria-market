@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { projectId } from '../utils/supabase/info';
+import { projectId, publicAnonKey } from '../utils/supabase/info';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -52,6 +52,7 @@ export function LeChargePage({ session }: LeChargePageProps) {
   const [proofFile, setProofFile] = useState<File | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [selectedWarehouse, setSelectedWarehouse] = useState<string>('');
+  const [expenseDate, setExpenseDate] = useState<string>(new Date().toISOString().split('T')[0]);
 
   // Fetch user role and current store
   useEffect(() => {
@@ -274,6 +275,7 @@ export function LeChargePage({ session }: LeChargePageProps) {
             proof_file: base64String,
             proof_file_type: proofFileType,
             proof_file_name: proofFileName,
+            payment_date: expenseDate,
           }),
         }
       );
@@ -284,6 +286,7 @@ export function LeChargePage({ session }: LeChargePageProps) {
         setExpenseReason('');
         setProofFile(null);
         setSelectedWarehouse('');
+        setExpenseDate(new Date().toISOString().split('T')[0]);
         setDialogOpen(false);
         fetchExpenses();
       } else {
@@ -578,6 +581,19 @@ export function LeChargePage({ session }: LeChargePageProps) {
                 />
               </div>
 
+              {/* Date Picker */}
+              <div className="space-y-2">
+                <Label htmlFor="expenseDate">Date de la Dépense *</Label>
+                <Input
+                  id="expenseDate"
+                  type="date"
+                  value={expenseDate}
+                  onChange={(e) => setExpenseDate(e.target.value)}
+                  required
+                />
+                <p className="text-xs text-gray-500">Sélectionnez la date à laquelle la dépense a eu lieu</p>
+              </div>
+
               {/* Category Search */}
               <div className="space-y-2">
                 <Label htmlFor="category">Catégorie de Dépense *</Label>
@@ -677,6 +693,7 @@ export function LeChargePage({ session }: LeChargePageProps) {
                     setExpenseAmount('');
                     setExpenseReason('');
                     setProofFile(null);
+                    setExpenseDate(new Date().toISOString().split('T')[0]);
                   }}
                 >
                   Annuler
@@ -762,13 +779,19 @@ export function LeChargePage({ session }: LeChargePageProps) {
                   {sortedExpenses.map((expense) => (
                     <TableRow key={expense.id} className="hover:bg-gray-50">
                       <TableCell className="text-sm">
-                        {new Date(expense.created_at).toLocaleDateString('fr-FR', {
-                          year: 'numeric',
-                          month: 'long',
-                          day: 'numeric',
-                          hour: '2-digit',
-                          minute: '2-digit',
-                        })}
+                        {expense.payment_date
+                          ? new Date(expense.payment_date).toLocaleDateString('fr-FR', {
+                              year: 'numeric',
+                              month: 'long',
+                              day: 'numeric',
+                            })
+                          : new Date(expense.created_at).toLocaleDateString('fr-FR', {
+                              year: 'numeric',
+                              month: 'long',
+                              day: 'numeric',
+                              hour: '2-digit',
+                              minute: '2-digit',
+                            })}
                       </TableCell>
                       {userRole === 'admin' && (
                         <TableCell className="text-sm font-medium">
@@ -878,6 +901,49 @@ export function LeChargePage({ session }: LeChargePageProps) {
                                     <p className="text-lg font-semibold text-red-600">
                                       -{selectedExpense.amount?.toFixed(2)} MAD
                                     </p>
+                                  </div>
+
+                                  <div className="border-b pb-4">
+                                    <p className="text-sm text-gray-600">Date de paiement</p>
+                                    <div className="flex items-center gap-2 mt-1">
+                                      <Input
+                                        type="date"
+                                        value={selectedExpense.payment_date ? new Date(selectedExpense.payment_date).toISOString().split('T')[0] : ''}
+                                        onChange={async (e) => {
+                                          const newDate = e.target.value;
+                                          if (!newDate || !selectedExpense.id) return;
+                                          
+                                          try {
+                                            const response = await fetch(
+                                              `https://${projectId}.supabase.co/rest/v1/expenses?id=eq.${selectedExpense.id}`,
+                                              {
+                                                method: 'PATCH',
+                                                headers: {
+                                                  'Content-Type': 'application/json',
+                                                  'Authorization': `Bearer ${session.access_token}`,
+                                                  'apikey': `${publicAnonKey}`,
+                                                },
+                                                body: JSON.stringify({
+                                                  payment_date: newDate,
+                                                }),
+                                              }
+                                            );
+                                            
+                                            if (response.ok) {
+                                              toast.success('Date de paiement mise à jour');
+                                              setSelectedExpense({ ...selectedExpense, payment_date: newDate });
+                                              fetchExpenses();
+                                            } else {
+                                              toast.error('Erreur lors de la mise à jour de la date');
+                                            }
+                                          } catch (error) {
+                                            console.error('Error updating payment date:', error);
+                                            toast.error('Erreur lors de la mise à jour de la date');
+                                          }
+                                        }}
+                                        className="w-auto"
+                                      />
+                                    </div>
                                   </div>
 
                                   <div className="border-b pb-4">

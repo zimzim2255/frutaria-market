@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+﻿import { useEffect, useMemo, useState } from 'react';
 import { projectId } from '../utils/supabase/info';
 import { Button } from './ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
@@ -1511,7 +1511,7 @@ export function CashManagementPage({ session }: CashManagementPageProps) {
         
         allPayments.push({
         id: `expense-${e.id}`,
-        date: e.created_at,
+        date: e.payment_date || e.created_at,
         store_id: e.store_id || null,
         amount: -amt,
         reason: e.reason || e.category || 'Dépense',

@@ -688,25 +688,12 @@ export default function StockReferenceHistoryModule({ session }: { session: any 
   if (showStockRefDetails && selectedStockRef) {
     const productsInRefRaw = filteredAdditions.filter(a => a.stock_reference === selectedStockRef);
 
-    // The details page must show ONE row per real product (products.id).
-    // `product_additions_history` can have multiple rows per product (restocks), which looks like duplicates.
-    // We keep the most recent history row per product_id for display/edit.
-    const productsInRef = (() => {
-      const byProductId = new Map<string, any>();
-      for (const row of productsInRefRaw) {
-        const pid = String((row as any)?.product_id || '').trim();
-        if (!pid) continue;
-        const prev = byProductId.get(pid);
-        if (!prev) {
-          byProductId.set(pid, row);
-          continue;
-        }
-        const tPrev = prev?.created_at ? new Date(String(prev.created_at)).getTime() : 0;
-        const tNext = row?.created_at ? new Date(String(row.created_at)).getTime() : 0;
-        if (tNext >= tPrev) byProductId.set(pid, row);
-      }
-      return Array.from(byProductId.values());
-    })();
+    // NOTE: We now show ALL history rows for this stock reference without deduplication.
+    // Previously, the code deduplicated by product_id (keeping only the most recent row per product),
+    // which caused some products to be hidden if they had multiple history entries.
+    // If the same product was added multiple times to the same stock reference (e.g., restocks),
+    // all entries will now be displayed so users can see the complete history.
+    const productsInRef = productsInRefRaw;
 
     const sortedProductsInRef = (() => {
       const list = productsInRef.slice();

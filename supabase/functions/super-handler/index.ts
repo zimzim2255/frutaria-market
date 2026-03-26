@@ -12507,6 +12507,7 @@ if (!existingInv?.id) {
         expense_type: body.expense_type || null,
         created_by: currentUser.id,
         updated_at: new Date().toISOString(),
+        payment_date: body.payment_date || null,
       };
 
       // Best-effort notes support (some DBs may not have the column)

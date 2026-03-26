@@ -1827,7 +1827,14 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
       creatorLabel.includes(q) ||
       giverLabel.includes(q);
 
-    const matchesStatus = filterStatus === 'all' || String(cs.status || '') === String(filterStatus);
+    // For 'utilized' filter: show checks where total_used > 0 (has been used for payments)
+    const checkStatus = String(cs.status || '');
+    const usageRow = (checkSafeUsages || []).find((u: any) => String(u.check_safe_id) === String(cs.id));
+    const totalUsed = Number(usageRow?.total_used ?? 0) || 0;
+    const isUsedCheck = totalUsed > 0;
+    const matchesStatus = 
+      filterStatus === 'all' || 
+      (filterStatus === 'utilized' ? isUsedCheck : checkStatus === String(filterStatus));
     const matchesStore = filterStore === 'all' || String(cs.store_id || '') === String(filterStore);
 
     // Date du chèque
@@ -5030,6 +5037,7 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
           className="w-full px-3 py-2 border rounded-md bg-white"
           >
           <option value="all">Tous les statuts</option>
+          <option value="utilized">Utilisé</option>
           <option value="pending">En attente</option>
           <option value="verified">Vérifié</option>
           <option value="confirmed">Confirmé</option>
