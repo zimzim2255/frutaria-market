@@ -749,6 +749,68 @@ export function ClientsModule({ session }: ClientsModuleProps) {
       return;
     }
 
+    // Duplicate client check (only for new clients, not editing)
+    if (!editingClient) {
+      const isAdmin = currentUserRole === 'admin';
+      const newName = formData.name.trim().toLowerCase().replace(/\s+/g, ' ');
+      const newPhone = formData.phone.trim();
+      const newIce = formData.ice.trim();
+      // For admin, the name will be prefixed with "Admin (client) - "
+      const adminPrefixedName = isAdmin ? `admin (client) - ${newName}` : newName;
+
+      // Fetch ALL clients from server to check for duplicates across all stores
+      let allClients: any[] = [];
+      try {
+        const allClientsResponse = await fetch(
+          `https://${projectId}.supabase.co/functions/v1/super-handler/clients`,
+          {
+            headers: {
+              'Authorization': `Bearer ${session.access_token}`,
+            },
+          }
+        );
+        if (allClientsResponse.ok) {
+          const allClientsData = await allClientsResponse.json();
+          allClients = allClientsData.clients || [];
+        }
+      } catch (error) {
+        console.error('Error fetching all clients for duplicate check:', error);
+      }
+
+      const duplicate = allClients.find((c: any) => {
+        const existingName = String(c.name || '').trim().toLowerCase().replace(/\s+/g, ' ');
+        const existingPhone = String(c.phone || '').trim();
+        const existingIce = String(c.ice || '').trim();
+
+        // Check for duplicate by name - handle all cases:
+        // 1. Exact name match (non-admin to non-admin)
+        // 2. Admin prefix match (admin to admin)
+        // 3. Name without prefix matches existing name with prefix (admin creating same as existing admin client)
+        // 4. Name with prefix matches existing name without prefix (edge case)
+        if (newName && existingName) {
+          if (newName === existingName) return true;
+          if (adminPrefixedName === existingName) return true;
+          if (existingName === `admin (client) - ${newName}`) return true;
+          // Also check if existing name starts with admin prefix and matches
+          if (existingName.startsWith('admin (client) - ') && existingName.replace('admin (client) - ', '') === newName) return true;
+        }
+
+        // Check for duplicate by phone
+        if (newPhone && existingPhone && newPhone === existingPhone) return true;
+
+        // Check for duplicate by ICE
+        if (newIce && existingIce && newIce === existingIce) return true;
+
+        return false;
+      });
+
+      if (duplicate) {
+        toast.error('Un client avec ce nom, téléphone ou ICE existe déjà');
+        setLoading(false);
+        return;
+      }
+    }
+
     setLoading(true);
 
     try {

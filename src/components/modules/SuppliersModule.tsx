@@ -496,6 +496,36 @@ export function SuppliersModule({ session }: SuppliersModuleProps) {
       return;
     }
 
+    // Duplicate supplier check (only for new suppliers, not editing)
+    if (!editingSupplier) {
+      const newName = formData.name.trim().toLowerCase().replace(/\s+/g, ' ');
+      const newPhone = formData.phone.trim().replace(/\s+/g, ' ');
+      const newEmail = formData.email.trim().toLowerCase().replace(/\s+/g, ' ');
+
+      const duplicate = suppliers.find((s: any) => {
+        const existingName = String(s.name || '').trim().toLowerCase().replace(/\s+/g, ' ');
+        const existingPhone = String(s.phone || '').trim().replace(/\s+/g, ' ');
+        const existingEmail = String(s.email || '').trim().toLowerCase().replace(/\s+/g, ' ');
+
+        // Check for duplicate by name
+        if (newName && existingName && newName === existingName) return true;
+
+        // Check for duplicate by phone
+        if (newPhone && existingPhone && newPhone === existingPhone) return true;
+
+        // Check for duplicate by email
+        if (newEmail && existingEmail && newEmail === existingEmail) return true;
+
+        return false;
+      });
+
+      if (duplicate) {
+        toast.error('Un fournisseur avec ce nom, téléphone ou email existe déjà');
+        setLoading(false);
+        return;
+      }
+    }
+
     setLoading(true);
 
     try {

@@ -1504,11 +1504,13 @@ export function SupplierDetailsPage({ supplier, session, onBack, onSupplierUpdat
                 <th>Total Facturé</th>
                 <th>Total Payé</th>
                 <th>Remise Donnée</th>
+                <th>Solde Restant</th>
                               </tr>
               <tr>
                 <td class="center">${money(totalFacture)}</td>
                 <td class="center">${money(totalPaid)}</td>
                 <td class="center">${money(totalRemise)}</td>
+                <td class="center">${money(soldeRestant)}</td>
                               </tr>
             </table>
 
@@ -1944,17 +1946,19 @@ export function SupplierDetailsPage({ supplier, session, onBack, onSupplierUpdat
       (doc as any).autoTable({
         startY: 28,
         theme: 'grid',
-        tableWidth: 180,
+        tableWidth: 235,
         margin: { left: 30 },
         head: [[
           'TOTAL FACTURÉ',
           'TOTAL PAYÉ',
           'REMISE DONNÉE',
+          'SOLDE RESTANT',
                   ]],
         body: [[
           money(totalFacture),
           money(totalPaid),
           money(totalRemise),
+          money(soldeRestant),
                   ]],
         styles: {
           fontSize: 9,
