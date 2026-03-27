@@ -12098,13 +12098,38 @@ if (!existingInv?.id) {
 
       if (error) throw error;
       
-      // Enrich discounts with supplier_id and normalize field names for easier filtering
-      const enrichedDiscounts = (data || []).map((discount: any) => ({
-        ...discount,
-        supplier_id: discount.entity_type === 'supplier' ? (discount.supplier_id || discount.entity_id) : null,
-        // Normalize amount field for backward compatibility
-        amount: discount.discount_amount || discount.amount || 0,
-      }));
+      // Collect unique created_by UUIDs to enrich with emails
+      const createdByIds = Array.from(
+        new Set((data || []).map((d: any) => d?.created_by).filter(Boolean).map((v: any) => String(v)))
+      );
+      
+      const emailByUserId = new Map<string, string>();
+      if (createdByIds.length > 0) {
+        const { data: usersRows, error: uErr } = await supabase
+          .from('users')
+          .select('id, email')
+          .in('id', createdByIds);
+        if (!uErr && usersRows) {
+          usersRows.forEach((u: any) => {
+            if (u?.id && u?.email) emailByUserId.set(String(u.id), String(u.email));
+          });
+        }
+      }
+      
+      // Enrich discounts with supplier_id, normalize field names, and add created_by_email
+      const enrichedDiscounts = (data || []).map((discount: any) => {
+        const createdBy = discount?.created_by ? String(discount.created_by) : null;
+        const created_by_email = discount?.created_by_email || (createdBy ? (emailByUserId.get(createdBy) || null) : null);
+        
+        return {
+          ...discount,
+          supplier_id: discount.entity_type === 'supplier' ? (discount.supplier_id || discount.entity_id) : null,
+          // Normalize amount field for backward compatibility
+          amount: discount.discount_amount || discount.amount || 0,
+          // Enrich with email from users table
+          created_by_email,
+        };
+      });
       
       return jsonResponse({ discounts: enrichedDiscounts });
     } catch (error: any) {

@@ -205,6 +205,33 @@ export function ProductsModule({ session }: ProductsModuleProps) {
     return '000001';
   };
 
+  // Check if a stock reference already exists in the database
+  const checkStockReferenceExists = async (stockRef: string): Promise<boolean> => {
+    try {
+      const response = await fetch(
+        `https://${projectId}.supabase.co/functions/v1/super-handler/stock-reference-details?stock_reference=${encodeURIComponent(stockRef)}`,
+        {
+          method: 'GET',
+          headers: {
+            'Authorization': `Bearer ${session.access_token}`,
+          },
+        }
+      );
+
+      if (response.ok) {
+        const data = await response.json();
+        // If details exist, the stock reference is already in use
+        return !!data.details;
+      }
+      // If 404 or other error, assume it doesn't exist
+      return false;
+    } catch (error) {
+      console.error('Error checking stock reference existence:', error);
+      // On error, allow the operation to proceed (backend will catch duplicates)
+      return false;
+    }
+  };
+
   const fetchInvoices = async () => {
     try {
       const response = await fetch(
@@ -745,6 +772,17 @@ export function ProductsModule({ session }: ProductsModuleProps) {
         const allocatedStockReference = customStockReference.trim()
           ? customStockReference.trim()
           : await allocateNextStockReference();
+
+        // MANDATORY CHECK: Verify that the stock reference doesn't already exist in the database
+        // This prevents duplication at the point of entry
+        if (allocatedStockReference) {
+          const exists = await checkStockReferenceExists(allocatedStockReference);
+          if (exists) {
+            toast.error(`La référence de stock "${allocatedStockReference}" existe déjà. Veuillez utiliser une référence différente.`);
+            setLoading(false);
+            return;
+          }
+        }
 
         // Persist company/header details for this stock reference (so SupplierDetails modal can display it)
         try {

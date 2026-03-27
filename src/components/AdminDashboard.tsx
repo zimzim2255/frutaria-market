@@ -931,7 +931,7 @@ export function AdminDashboard({ session, supabase }: AdminDashboardProps) {
                       </TabsList>
 
           <TabsContent value="dashboard">
-            <DashboardOverview stats={stats} session={session} />
+            <DashboardOverview session={session} userRole={userRole} />
           </TabsContent>
 
           <TabsContent value="products">

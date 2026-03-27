@@ -13,9 +13,9 @@ function formatReference(ref: string | null | undefined): string {
     if (parts.length >= 3) {
       // Extract the timestamp (last part)
       const timestamp = parts[parts.length - 1];
-      // Use last 6 digits of timestamp for a simple reference
-      const shortRef = timestamp.slice(-6);
-      return `PASSAGE-${shortRef}`;
+      // Use last 4 digits of timestamp for a simple reference
+      const shortRef = timestamp.slice(-4);
+      return `P-${shortRef}`;
     }
     return str;
   }
@@ -23,8 +23,8 @@ function formatReference(ref: string | null | undefined): string {
   // Handle pure UUID format (8-4-4-4-12 characters)
   const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   if (uuidPattern.test(str)) {
-    // Use first 8 characters of UUID for a simple reference
-    return str.substring(0, 8);
+    // Use first 6 characters of UUID for a simple reference
+    return str.substring(0, 6);
   }
   
   // Return as-is if it's already a simple reference
@@ -1167,7 +1167,7 @@ export function SupplierDetailsPage({ supplier, session, onBack, onSupplierUpdat
         dateRaw: rawDate,
         amount: -amt,
         payment_method: 'REMISE',
-        reference: String(ref),
+        reference: formatReference(ref),
         actor,
         notes,
       });
@@ -1277,7 +1277,7 @@ export function SupplierDetailsPage({ supplier, session, onBack, onSupplierUpdat
         _amount: Number(p.amount || 0) || 0,
         _method: String(p.payment_method || p.method || p.type || '-'),
         _reference: '-',
-        _paymentReference: p.reference_number || p.reference || '-',
+        _paymentReference: formatReference(p.reference_number || p.reference || '-'),
         _coffer: '-',
         _actor: p.created_by_email || p.created_by || '-',
         _notes: p.notes || '-',
@@ -1376,11 +1376,11 @@ export function SupplierDetailsPage({ supplier, session, onBack, onSupplierUpdat
           _dateStr: fmtDateTime(g.rawDate),
           _amount: g.val,
           _method: 'STOCK',
-          _reference: stockRef,
+          _reference: formatReference(stockRef),
           _paymentReference: '-',
           _coffer: '-',
           _actor: g.actor || '-',
-          _notes: g.notes || `Achat stock (${stockRef})`,
+          _notes: g.notes || `Achat stock (${formatReference(stockRef)})`,
           _remise: 0,
         });
       });
@@ -1413,7 +1413,7 @@ export function SupplierDetailsPage({ supplier, session, onBack, onSupplierUpdat
         _amount: -Math.abs(amount),
         _method: 'REMISE',
         _reference: '-',
-        _paymentReference: String(ref),
+        _paymentReference: formatReference(ref),
         _coffer: '-',
         _actor: actor,
         _notes: notes,
@@ -1504,13 +1504,11 @@ export function SupplierDetailsPage({ supplier, session, onBack, onSupplierUpdat
                 <th>Total Facturé</th>
                 <th>Total Payé</th>
                 <th>Remise Donnée</th>
-                <th>Solde Restant</th>
                               </tr>
               <tr>
                 <td class="center">${money(totalFacture)}</td>
                 <td class="center">${money(totalPaid)}</td>
                 <td class="center">${money(totalRemise)}</td>
-                <td class="center">${money(soldeRestant)}</td>
                               </tr>
             </table>
 
@@ -1946,19 +1944,17 @@ export function SupplierDetailsPage({ supplier, session, onBack, onSupplierUpdat
       (doc as any).autoTable({
         startY: 28,
         theme: 'grid',
-        tableWidth: 235,
+        tableWidth: 180,
         margin: { left: 30 },
         head: [[
           'TOTAL FACTURÉ',
           'TOTAL PAYÉ',
           'REMISE DONNÉE',
-          'SOLDE RESTANT',
                   ]],
         body: [[
           money(totalFacture),
           money(totalPaid),
           money(totalRemise),
-          money(soldeRestant),
                   ]],
         styles: {
           fontSize: 9,
@@ -2074,7 +2070,6 @@ export function SupplierDetailsPage({ supplier, session, onBack, onSupplierUpdat
         ['Total Facturé', money(totalFacture)],
         ['Total Payé', money(totalPaid)],
         ['Total Remise', money(totalRemise)],
-        ['Solde Restant', money(soldeRestant)],
       ];
 
       // Ensure the entire recap block (title + table) stays on ONE page.

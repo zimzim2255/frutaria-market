@@ -6,9 +6,10 @@ import { toast } from 'sonner';
 
 interface DashboardOverviewProps {
   session: any;
+  userRole?: string;
 }
 
-export function DashboardOverview({ session }: DashboardOverviewProps) {
+export function DashboardOverview({ session, userRole: userRoleProp }: DashboardOverviewProps) {
   const [stats, setStats] = useState({
     totalProducts: 0,
     totalStores: 0,
@@ -20,15 +21,22 @@ export function DashboardOverview({ session }: DashboardOverviewProps) {
   const [recentOrders, setRecentOrders] = useState<any[]>([]);
   const [lowStockProducts, setLowStockProducts] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [userRole, setUserRole] = useState<string>('user');
+  const [userRole, setUserRole] = useState<string>(userRoleProp || 'user');
   const [userStoreId, setUserStoreId] = useState<string | null>(null);
+
+  // Update role when prop changes
+  useEffect(() => {
+    if (userRoleProp) {
+      setUserRole(userRoleProp);
+    }
+  }, [userRoleProp]);
 
   // Fetch user role and store info from user metadata
   useEffect(() => {
     try {
       // Get user role and store from session metadata
       const userMetadata = session?.user?.user_metadata || {};
-      const role = userMetadata.role || 'user';
+      const role = userRoleProp || userMetadata.role || 'user';
       setUserRole(role);
       
       // For non-admin users, try to get store_id from metadata or default to null
@@ -40,9 +48,9 @@ export function DashboardOverview({ session }: DashboardOverviewProps) {
     } catch (error) {
       console.error('Error reading user info:', error);
       // Default to user role if error
-      setUserRole('user');
+      setUserRole(userRoleProp || 'user');
     }
-  }, [session]);
+  }, [session, userRoleProp]);
 
   const fetchStats = async () => {
     try {
