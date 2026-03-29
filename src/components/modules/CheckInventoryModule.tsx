@@ -2685,15 +2685,17 @@ export function CheckInventoryModule({ session }: { session: any }) {
                             </TableCell>
                             <TableCell className="text-right">
                               <div className="flex justify-end gap-2">
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  onClick={() => openEditDialog(check)}
-                                  disabled={!canEditCheckInventory}
-                                  title={!canEditCheckInventory ? "Vous n'avez pas la permission « Modifier un Chèque »" : undefined}
-                                >
-                                  <Edit className="w-4 h-4" />
-                                </Button>
+                                {isAdmin && (
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => openEditDialog(check)}
+                                    disabled={!canEditCheckInventory}
+                                    title={!canEditCheckInventory ? "Vous n'avez pas la permission « Modifier un Chèque »" : undefined}
+                                  >
+                                    <Edit className="w-4 h-4" />
+                                  </Button>
+                                )}
                                 {check.image_url && (
                                   <Button
                                     size="sm"
@@ -2728,14 +2730,18 @@ export function CheckInventoryModule({ session }: { session: any }) {
                                 >
                                   <Eye className="w-4 h-4" />
                                 </Button>
-                                <Button
-                                  size="sm"
-                                  style={{ backgroundColor: '#dc2626' }}
-                                  className="text-white hover:opacity-90"
-                                  onClick={() => handleDelete(check.id)}
-                                >
-                                  <Trash2 className="w-4 h-4" />
-                                </Button>
+                                {isAdmin && (
+                                  <Button
+                                    size="sm"
+                                    style={{ backgroundColor: '#dc2626' }}
+                                    className="text-white hover:opacity-90"
+                                    onClick={() => handleDelete(check.id)}
+                                    disabled={!canDeleteCheckInventory}
+                                    title={!canDeleteCheckInventory ? "Vous n'avez pas la permission « Supprimer un Chèque »" : undefined}
+                                  >
+                                    <Trash2 className="w-4 h-4" />
+                                  </Button>
+                                )}
                               </div>
                             </TableCell>
                           </TableRow>

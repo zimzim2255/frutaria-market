@@ -11,6 +11,7 @@ import { Badge } from '../ui/badge';
 import { toast } from 'sonner';
 import jsPDF from 'jspdf';
 import 'jspdf-autotable';
+import { exportSupplierToExcel } from '../../utils/export/supplierExcelExport';
 import { SupplierDetailsPage } from '../SupplierDetailsPage';
 
 interface SuppliersModuleProps {
@@ -257,6 +258,53 @@ export function SuppliersModule({ session }: SuppliersModuleProps) {
     doc.save(`fournisseurs_${new Date().toISOString().split('T')[0]}.pdf`);
     toast.success('PDF exporté avec succès');
   };
+
+  // Export to Excel function
+  const exportToExcelFile = () => {
+    // Prepare table data
+    const tableData = filteredSuppliersForExport.map(supplier => {
+      const supplierPayments = payments.filter(p => p.supplier_id === supplier.id);
+      const supplierAdvanceRows = supplierAdvances.filter((a: any) => String(a?.supplier_id || '') === String(supplier.id));
+      const totalPaidPayments = supplierPayments.reduce((sum, p) => sum + (p.amount || 0), 0);
+      const totalPaidAdvances = supplierAdvanceRows.reduce((sum: number, a: any) => sum + (Number(a?.amount || 0) || 0), 0);
+      const totalPaid = totalPaidPayments + totalPaidAdvances;
+      const supplierDiscounts = discounts.filter(d => d.supplier_id === supplier.id);
+      const discountGiven = supplierDiscounts.reduce((sum, d) => sum + (d.amount || 0), 0);
+      const totalInvoiced = supplier.balance || 0;
+      const remainingBalance = totalInvoiced - totalPaid;
+      // IMPORTANT: allow negative (supplier credit) to be displayed in Excel.
+      const balanceAfterDiscount = (remainingBalance - discountGiven);
+
+      return {
+        name: supplier.name,
+        phone: supplier.phone || '-',
+        city: supplier.city || '-',
+        totalInvoiced: totalInvoiced.toFixed(2),
+        totalPaid: totalPaid.toFixed(2),
+        remainingBalance: balanceAfterDiscount.toFixed(2),
+        discountGiven: discountGiven > 0 ? discountGiven.toFixed(2) : '-',
+        status: 'ACTIF'
+      };
+    });
+
+    // Define columns for Excel export
+    const columns = [
+      { header: 'Nom du Fournisseur', accessor: (row: any) => row.name },
+      { header: 'Téléphone', accessor: (row: any) => row.phone },
+      { header: 'Ville', accessor: (row: any) => row.city },
+      { header: 'Total Facturé (MAD)', accessor: (row: any) => row.totalInvoiced },
+      { header: 'Total Payé (MAD)', accessor: (row: any) => row.totalPaid },
+      { header: 'Solde Restant (MAD)', accessor: (row: any) => row.remainingBalance },
+      { header: 'Remise Donnée (MAD)', accessor: (row: any) => row.discountGiven },
+      { header: 'Statut', accessor: (row: any) => row.status }
+    ];
+
+    // Export to Excel
+    exportSupplierToExcel(tableData, columns, `fournisseurs_${new Date().toISOString().split('T')[0]}`);
+    toast.success('Excel exporté avec succès');
+  };
+
+
 
   const fetchStores = async () => {
     try {
@@ -2839,6 +2887,14 @@ export function SuppliersModule({ session }: SuppliersModuleProps) {
           <Download className="w-4 h-4 mr-2" />
           Exporter PDF
           </Button>
+          <Button
+          onClick={exportToExcelFile}
+          style={{ backgroundColor: '#10b981', color: 'white' }}
+          title="Exporter en Excel"
+          >
+          <Download className="w-4 h-4 mr-2" />
+          Exporter Excel
+          </Button>
 
           <Button
             onClick={() => {
@@ -3668,20 +3724,24 @@ export function SuppliersModule({ session }: SuppliersModuleProps) {
                               >
                                 <ShoppingCart className="w-4 h-4" />
                               </Button>
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={() => handleEdit(supplier)}
-                              >
-                                <Edit className="w-4 h-4" />
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={() => handleDelete(supplier.id)}
-                              >
-                                <Trash2 className="w-4 h-4 text-red-600" />
-                              </Button>
+                              {isAdmin && canEditSupplier && (
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => handleEdit(supplier)}
+                                >
+                                  <Edit className="w-4 h-4" />
+                                </Button>
+                              )}
+                              {isAdmin && canDeleteSupplier && (
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => handleDelete(supplier.id)}
+                                >
+                                  <Trash2 className="w-4 h-4 text-red-600" />
+                                </Button>
+                              )}
                             </div>
                           </TableCell>
                         </TableRow>

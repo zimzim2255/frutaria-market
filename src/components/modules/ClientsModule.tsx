@@ -12,6 +12,7 @@ import { toast } from 'sonner@2.0.3';
 import { ClientDetailsPage } from '../ClientDetailsPage';
 import jsPDF from 'jspdf';
 import 'jspdf-autotable';
+import { exportToExcel } from '../../utils/export/excelExport';
 
 interface ClientsModuleProps {
   session: any;
@@ -239,6 +240,48 @@ export function ClientsModule({ session }: ClientsModuleProps) {
     // Save PDF
     doc.save(`clients_${new Date().toISOString().split('T')[0]}.pdf`);
     toast.success('PDF exporté avec succès');
+  };
+
+  // Export to Excel function
+  const exportToExcelFile = () => {
+    // Prepare table data
+    const tableData = filteredClientsForExport.map(client => {
+      const financials = clientFinancials[client.id] || { totalInvoiced: 0, totalPaid: 0, totalRemaining: 0 };
+      const discountAmount = Number(clientDiscounts[client.id] || 0) || 0;
+
+      // IMPORTANT:
+      // - UI Solde Restant is (totalInvoiced - totalPaid - remise)
+      // - It can be NEGATIVE (client credit). Excel must show the negative value too.
+      const soldRestantApresRemise =
+        (Number(financials.totalInvoiced) || 0) - (Number(financials.totalPaid) || 0) - discountAmount;
+
+      return {
+        name: client.name,
+        phone: client.phone || '-',
+        address: client.address || '-',
+        totalInvoiced: (Number(financials.totalInvoiced) || 0).toFixed(2),
+        totalPaid: (Number(financials.totalPaid) || 0).toFixed(2),
+        discount: discountAmount.toFixed(2),
+        remainingBalance: soldRestantApresRemise.toFixed(2),
+        status: 'ACTIF'
+      };
+    });
+
+    // Define columns for Excel export
+    const columns = [
+      { header: 'Nom du Client', accessor: (row: any) => row.name },
+      { header: 'Téléphone', accessor: (row: any) => row.phone },
+      { header: 'Adresse', accessor: (row: any) => row.address },
+      { header: 'Total Facturé (MAD)', accessor: (row: any) => row.totalInvoiced },
+      { header: 'Total Payé (MAD)', accessor: (row: any) => row.totalPaid },
+      { header: 'Remise (MAD)', accessor: (row: any) => row.discount },
+      { header: 'Solde Restant (MAD)', accessor: (row: any) => row.remainingBalance },
+      { header: 'Statut', accessor: (row: any) => row.status }
+    ];
+
+    // Export to Excel
+    exportToExcel(tableData, columns, `clients_${new Date().toISOString().split('T')[0]}`);
+    toast.success('Excel exporté avec succès');
   };
 
   // Fetch current store and clients
@@ -1890,6 +1933,19 @@ export function ClientsModule({ session }: ClientsModuleProps) {
                 <Download className="w-4 h-4 mr-2" />
                 Exporter PDF
               </Button>
+              <Button
+                onClick={() => {
+                  // Admin may export ALL if no magasin is selected.
+                  exportToExcelFile();
+                }}
+                style={{ backgroundColor: '#10b981', color: 'white' }}
+                title={(currentUserRole === 'admin' || session?.user?.user_metadata?.role === 'admin')
+                  ? (adminSelectedStoreId ? 'Exporter ce magasin en Excel' : 'Exporter tous les clients en Excel')
+                  : 'Exporter en Excel'}
+              >
+                <Download className="w-4 h-4 mr-2" />
+                Exporter Excel
+              </Button>
               <Button 
                 onClick={() => {
                   if ((currentUserRole === 'admin' || session?.user?.user_metadata?.role === 'admin') && !adminSelectedStoreId) {
@@ -3204,20 +3260,28 @@ export function ClientsModule({ session }: ClientsModuleProps) {
                                 >
                                   <Eye className="w-4 h-4" />
                                 </Button>
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  onClick={() => handleEdit(client)}
-                                >
-                                  <Edit className="w-4 h-4" />
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  onClick={() => handleDelete(client.id)}
-                                >
-                                  <Trash2 className="w-4 h-4 text-red-600" />
-                                </Button>
+                                {isAdmin && (
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => handleEdit(client)}
+                                    disabled={!canEditClient}
+                                    title={!canEditClient ? "Vous n'avez pas la permission de modifier les clients" : "Modifier"}
+                                  >
+                                    <Edit className="w-4 h-4" />
+                                  </Button>
+                                )}
+                                {isAdmin && (
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => handleDelete(client.id)}
+                                    disabled={!canDeleteClient}
+                                    title={!canDeleteClient ? "Vous n'avez pas la permission de supprimer les clients" : "Supprimer"}
+                                  >
+                                    <Trash2 className="w-4 h-4 text-red-600" />
+                                  </Button>
+                                )}
                               </div>
                             </TableCell>
                           </TableRow>
