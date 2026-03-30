@@ -56,6 +56,14 @@ export function ProductsModule({ session }: ProductsModuleProps) {
     key: null,
     direction: 'asc',
   });
+
+  // Pagination state
+  const [displayLimit, setDisplayLimit] = useState(100);
+
+  // Reset pagination when filters change
+  useEffect(() => {
+    setDisplayLimit(100);
+  }, [searchTerm, storeFilter, createdByFilter, sharedStockOnlyZero, sharedStockOnlyNonZero]);
   const [formData, setFormData] = useState({
     name: '',
     reference: '',
@@ -304,7 +312,7 @@ export function ProductsModule({ session }: ProductsModuleProps) {
         console.log('Current user ID:', session?.user?.id);
         console.log('Number of products:', data.products?.length);
         data.products?.forEach((p: any) => {
-          console.log(`Product ID: ${p.id}, Reference: ${p.reference}, Created by: ${p.created_by}, Store stocks:`, p.store_stocks, 'Quantity available:', p.quantity_available);
+          console.log(`[ProductsModule] Product ID: ${p.id}, Reference: ${p.reference}, Name: ${p.name}, Created by: ${p.created_by}, Store stocks:`, p.store_stocks, 'Quantity available:', p.quantity_available, 'Total store stock:', p.total_store_stock);
         });
         setProducts(data.products || []);
         
@@ -1704,6 +1712,9 @@ export function ProductsModule({ session }: ProductsModuleProps) {
       return 0;
     });
   })();
+
+  // Paginated products (display only first `displayLimit` items)
+  const paginatedProducts = sortedProducts.slice(0, displayLimit);
 
   // Columns to render for per-magasin stock.
   // - Admin: show all magasins from the stores list
@@ -3807,14 +3818,14 @@ export function ProductsModule({ session }: ProductsModuleProps) {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {sortedProducts.length === 0 ? (
+                    {paginatedProducts.length === 0 ? (
                       <TableRow>
                         <TableCell colSpan={10} className="text-center text-gray-500 py-8">
                           Aucun produit trouvé
                         </TableCell>
                       </TableRow>
                     ) : (
-                      sortedProducts.map((product) => (
+                      paginatedProducts.map((product) => (
                         <TableRow key={product.id}>
                           <TableCell className="w-12">
                             <input
@@ -3928,6 +3939,19 @@ export function ProductsModule({ session }: ProductsModuleProps) {
                     )}
                   </TableBody>
                 </Table>
+
+                {/* Voir plus button */}
+                {sortedProducts.length > displayLimit && (
+                  <div className="flex justify-center mt-4">
+                    <Button
+                      onClick={() => setDisplayLimit((prev) => prev + 100)}
+                      variant="outline"
+                      className="bg-blue-50 text-blue-700 hover:bg-blue-100 border-blue-300"
+                    >
+                      Voir plus ({sortedProducts.length - displayLimit} restants)
+                    </Button>
+                  </div>
+                )}
               </div>
             )}
           </div>

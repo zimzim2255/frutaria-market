@@ -34,6 +34,14 @@ export function OrdersModule({ session }: OrdersModuleProps) {
   const [currentUserStoreId, setCurrentUserStoreId] = useState<string | null>(null);
   const [selectedOrders, setSelectedOrders] = useState<Set<string>>(new Set());
 
+  // Pagination state
+  const [displayLimit, setDisplayLimit] = useState(100);
+
+  // Reset pagination when filters change
+  useEffect(() => {
+    setDisplayLimit(100);
+  }, [searchTerm, statusFilter]);
+
   const fetchOrders = async () => {
     try {
       const [ordersResponse, salesResponse] = await Promise.all([
@@ -333,6 +341,9 @@ export function OrdersModule({ session }: OrdersModuleProps) {
     return matchesSearch && matchesStatus;
   });
 
+  // Paginated sales (display only first `displayLimit` items)
+  const paginatedSales = sales.slice(0, displayLimit);
+
   const pendingOrders = filteredOrders.filter(o => o.delivery_status === 'pending');
   const preparingOrders = filteredOrders.filter(o => o.delivery_status === 'preparing');
   const inTransitOrders = filteredOrders.filter(o => o.delivery_status === 'in_transit');
@@ -579,7 +590,7 @@ export function OrdersModule({ session }: OrdersModuleProps) {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {sales.map((sale) => {
+                    {paginatedSales.map((sale) => {
                       const customerInfo = sale.notes ? sale.notes.split(', ').reduce((acc: any, part: string) => {
                         const [key, value] = part.split(': ');
                         acc[key] = value;
@@ -706,6 +717,19 @@ export function OrdersModule({ session }: OrdersModuleProps) {
                     })}
                   </TableBody>
                 </Table>
+
+                {/* Voir plus button */}
+                {sales.length > displayLimit && (
+                  <div className="flex justify-center mt-4">
+                    <Button
+                      onClick={() => setDisplayLimit((prev) => prev + 100)}
+                      variant="outline"
+                      className="bg-blue-50 text-blue-700 hover:bg-blue-100 border-blue-300"
+                    >
+                      Voir plus ({sales.length - displayLimit} restants)
+                    </Button>
+                  </div>
+                )}
               </div>
             </div>
           )}

@@ -88,6 +88,9 @@ export default function ProductAdditionHistoryModule({ session }: { session: any
   // Sorting state
   const [sortByValue, setSortByValue] = useState<'none' | 'high-to-low' | 'low-to-high'>('none');
 
+  // Pagination state
+  const [displayLimit, setDisplayLimit] = useState(100);
+
   // Safe table sorting (click headers)
   const [sortConfig, setSortConfig] = useState<{ key: string; direction: 'asc' | 'desc' } | null>(null);
 
@@ -322,6 +325,9 @@ export default function ProductAdditionHistoryModule({ session }: { session: any
 
   // Apply filters
   useEffect(() => {
+    // Reset pagination when filters change
+    setDisplayLimit(100);
+
     let filtered = additions;
 
     // Search filter
@@ -426,6 +432,9 @@ export default function ProductAdditionHistoryModule({ session }: { session: any
 
     return list;
   })();
+
+  // Paginated additions (display only first `displayLimit` items)
+  const paginatedAdditions = sortedAdditions.slice(0, displayLimit);
 
   const handleViewDetails = (addition: ProductAddition) => {
     if (!canViewAdditionDetails) {
@@ -1029,7 +1038,7 @@ export default function ProductAdditionHistoryModule({ session }: { session: any
                   </tr>
                 </thead>
                 <tbody className="divide-y">
-                  {sortedAdditions.map((addition) => (
+                  {paginatedAdditions.map((addition) => (
                     <tr key={addition.id} className="hover:bg-gray-50">
                       <td className="px-6 py-4 text-sm font-mono font-medium text-gray-900">{addition.reference}</td>
                       <td className="px-6 py-4 text-sm text-gray-900 font-medium">{addition.name}</td>
@@ -1061,6 +1070,19 @@ export default function ProductAdditionHistoryModule({ session }: { session: any
                   ))}
                 </tbody>
               </table>
+
+              {/* Voir plus button */}
+              {sortedAdditions.length > displayLimit && (
+                <div className="flex justify-center mt-4">
+                  <Button
+                    onClick={() => setDisplayLimit((prev) => prev + 100)}
+                    variant="outline"
+                    className="bg-blue-50 text-blue-700 hover:bg-blue-100 border-blue-300"
+                  >
+                    Voir plus ({sortedAdditions.length - displayLimit} restants)
+                  </Button>
+                </div>
+              )}
             </div>
           )}
         </CardContent>

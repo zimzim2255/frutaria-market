@@ -142,6 +142,9 @@ export default function StockReferenceHistoryModule({ session }: { session: any 
   const [groupsSortConfig, setGroupsSortConfig] = useState<{ key: string; direction: 'asc' | 'desc' } | null>(null);
   const [productsSortConfig, setProductsSortConfig] = useState<{ key: string; direction: 'asc' | 'desc' } | null>(null);
 
+  // Pagination state for groups table
+  const [groupsDisplayCount, setGroupsDisplayCount] = useState<number>(100);
+
   const toggleSort = (table: 'groups' | 'products', key: string) => {
     const setter = table === 'groups' ? setGroupsSortConfig : setProductsSortConfig;
     setter((prev) => {
@@ -2050,6 +2053,10 @@ export default function StockReferenceHistoryModule({ session }: { session: any 
                     return sortNumber(g.total_quantity);
                   case 'total_value':
                     return sortNumber(g.total_value);
+                  case 'date':
+                    // Sort by most recent operation date
+                    const dates = g.products.map(p => new Date(p.created_at).getTime()).filter(t => !isNaN(t));
+                    return dates.length > 0 ? Math.max(...dates) : 0;
                   default:
                     return '';
                 }
@@ -2083,6 +2090,10 @@ export default function StockReferenceHistoryModule({ session }: { session: any 
               );
             }
 
+            // Paginate groups
+            const displayedGroups = sortedGroups.slice(0, groupsDisplayCount);
+            const hasMoreGroups = sortedGroups.length > groupsDisplayCount;
+
             return (
               <div className="overflow-x-auto">
                 <table className="w-full">
@@ -2113,11 +2124,16 @@ export default function StockReferenceHistoryModule({ session }: { session: any 
                           Valeur Totale <span className="text-xs opacity-70">{getSortIndicator('groups', 'total_value')}</span>
                         </button>
                       </th>
+                      <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">
+                        <button type="button" onClick={() => toggleSort('groups', 'date')} className="inline-flex items-center gap-2 hover:underline">
+                          Date de l'Opération <span className="text-xs opacity-70">{getSortIndicator('groups', 'date')}</span>
+                        </button>
+                      </th>
                       <th className="px-6 py-3 text-right text-sm font-semibold text-gray-900">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y">
-                    {sortedGroups.map((group) => (
+                    {displayedGroups.map((group) => (
                       <tr key={group.stock_reference} className="hover:bg-gray-50">
                         <td className="px-6 py-4 text-sm font-mono font-bold text-blue-600">
                           {group.stock_reference}
@@ -2133,6 +2149,14 @@ export default function StockReferenceHistoryModule({ session }: { session: any 
                         </td>
                         <td className="px-6 py-4 text-sm text-right font-semibold text-green-600">
                           {group.total_value.toFixed(2)} MAD
+                        </td>
+                        <td className="px-6 py-4 text-sm text-gray-600">
+                          {(() => {
+                            const dates = group.products.map(p => new Date(p.created_at)).filter(d => !isNaN(d.getTime()));
+                            if (dates.length === 0) return '-';
+                            const mostRecent = new Date(Math.max(...dates.map(d => d.getTime())));
+                            return mostRecent.toLocaleDateString('fr-FR');
+                          })()}
                         </td>
                         <td className="px-6 py-4 text-sm text-right">
                           <Button
@@ -2157,6 +2181,17 @@ export default function StockReferenceHistoryModule({ session }: { session: any 
                     ))}
                   </tbody>
                 </table>
+                {hasMoreGroups && (
+                  <div className="mt-4 text-center">
+                    <Button
+                      onClick={() => setGroupsDisplayCount(prev => prev + 100)}
+                      variant="outline"
+                      className="text-blue-600 hover:text-blue-700"
+                    >
+                      Voir plus ({sortedGroups.length - groupsDisplayCount} restants)
+                    </Button>
+                  </div>
+                )}
               </div>
             );
           })()}

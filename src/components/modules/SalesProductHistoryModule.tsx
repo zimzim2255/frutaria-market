@@ -67,6 +67,14 @@ export default function SalesProductHistoryModule({ session }: { session: any })
   // Safe table sorting (click headers)
   const [sortConfig, setSortConfig] = useState<{ key: string; direction: 'asc' | 'desc' } | null>(null);
 
+  // Pagination state
+  const [displayLimit, setDisplayLimit] = useState(100);
+
+  // Reset pagination when filters change
+  useEffect(() => {
+    setDisplayLimit(100);
+  }, [searchTerm, startDate, endDate, filterDocType, filterStore]);
+
   const toggleSort = (key: string) => {
     setSortConfig((prev) => {
       if (!prev || prev.key !== key) return { key, direction: 'asc' };
@@ -383,6 +391,9 @@ export default function SalesProductHistoryModule({ session }: { session: any })
 
     return list;
   }, [filtered, sortConfig]);
+
+  // Paginated rows (display only first `displayLimit` items)
+  const paginatedRows = sortedRows.slice(0, displayLimit);
 
   // Stats should follow FILTERS, not sorting order. Use the filtered dataset.
   const stats: Stats = useMemo(() => {
@@ -722,10 +733,10 @@ export default function SalesProductHistoryModule({ session }: { session: any })
                   </tr>
                 </thead>
                 <tbody
-                  key={`${searchTerm}__${startDate}__${endDate}__${filterDocType}__${filterStore}__${sortConfig?.key || 'none'}__${sortConfig?.direction || 'none'}__${sortedRows.length}`}
+                  key={`${searchTerm}__${startDate}__${endDate}__${filterDocType}__${filterStore}__${sortConfig?.key || 'none'}__${sortConfig?.direction || 'none'}__${paginatedRows.length}`}
                   className="divide-y"
                 >
-                  {sortedRows.map((r) => {
+                  {paginatedRows.map((r) => {
                     const d = r.sale_date ? new Date(r.sale_date) : (r.created_at ? new Date(r.created_at) : null);
                     const dateStr = d && !Number.isNaN(d.getTime()) ? d.toLocaleDateString('fr-FR') : '-';
                     return (
@@ -748,6 +759,19 @@ export default function SalesProductHistoryModule({ session }: { session: any })
                   })}
                 </tbody>
               </table>
+
+              {/* Voir plus button */}
+              {sortedRows.length > displayLimit && (
+                <div className="flex justify-center mt-4">
+                  <Button
+                    onClick={() => setDisplayLimit((prev) => prev + 100)}
+                    variant="outline"
+                    className="bg-blue-50 text-blue-700 hover:bg-blue-100 border-blue-300"
+                  >
+                    Voir plus ({sortedRows.length - displayLimit} restants)
+                  </Button>
+                </div>
+              )}
             </div>
           )}
         </CardContent>
