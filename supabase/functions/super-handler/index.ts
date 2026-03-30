@@ -4500,6 +4500,73 @@ async function handler(req: Request): Promise<Response> {
     }
   }
 
+  if (path === "/coffer-movements" && method === "PUT") {
+    try {
+      const body = await req.json().catch(() => ({}));
+      const currentUser = await getCurrentUserWithRole(req);
+      if (!currentUser) return jsonResponse({ error: "Unauthorized" }, 401);
+
+      const movementId = String(body.id || '').trim();
+      if (!movementId) {
+        return jsonResponse({ error: "Movement ID is required" }, 400);
+      }
+
+      // Verify the movement exists
+      const { data: existingMovement, error: fetchError } = await supabase
+        .from("expenses")
+        .select("*")
+        .eq("id", movementId)
+        .maybeSingle();
+
+      if (fetchError) throw fetchError;
+      if (!existingMovement) {
+        return jsonResponse({ error: "Movement not found" }, 404);
+      }
+
+      // Build update object with only provided fields
+      const updateData: any = {};
+
+      if (body.amount !== undefined) {
+        const amount = Number(body.amount);
+        if (!Number.isFinite(amount)) {
+          return jsonResponse({ error: "Invalid amount" }, 400);
+        }
+        updateData.amount = amount;
+      }
+
+      if (body.reason !== undefined) {
+        updateData.reason = body.reason ? String(body.reason).trim() : null;
+      }
+
+      if (body.notes !== undefined) {
+        updateData.notes = body.notes ? String(body.notes).trim() : null;
+      }
+
+      if (body.payment_date !== undefined) {
+        updateData.payment_date = body.payment_date ? String(body.payment_date) : null;
+      }
+
+      // Only update if there are changes
+      if (Object.keys(updateData).length === 0) {
+        return jsonResponse({ error: "No fields to update" }, 400);
+      }
+
+      const { data: updated, error: updateError } = await supabase
+        .from("expenses")
+        .update(updateData)
+        .eq("id", movementId)
+        .select()
+        .maybeSingle();
+
+      if (updateError) throw updateError;
+
+      return jsonResponse({ success: true, movement: updated });
+    } catch (error: any) {
+      console.error("Error updating coffer movement:", error);
+      return jsonResponse({ error: error.message }, 500);
+    }
+  }
+
   if (path === "/product-templates" && method === "POST") {
   try {
   const body = await req.json().catch(() => ({}));
@@ -7314,26 +7381,77 @@ if (!existingInv?.id) {
   const myStoreId = (currentUser.store_id ? String(currentUser.store_id).trim() : null) || metaStoreId;
   
   // Return sales rows enriched with actor/store meta (needed for UI marking BL/ACHAT/TRANSFER + "par")
-  let query = supabase
-  .from("sales")
-  .select("*")
-  .order("created_at", { ascending: false });
+  // Implement pagination to fetch all records (Supabase caps at 1000 per request)
+  const PAGE_SIZE = 1000;
+  let allSales: any[] = [];
+  let page = 0;
+  let hasMore = true;
   
-  if (role !== "admin") {
-  if (!myStoreId) return jsonResponse({ sales: [] });
-  // IMPORTANT: for transfers/purchases, a magasin must see rows where it is either:
-  // - destination (store_id)
-  // - OR source (source_store_id)
-  query = query.or(`store_id.eq.${myStoreId},source_store_id.eq.${myStoreId}`);
+  while (hasMore) {
+    let query = supabase
+      .from("sales")
+      .select("*")
+      .order("created_at", { ascending: false })
+      .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1);
+    
+    if (role !== "admin") {
+      if (!myStoreId) return jsonResponse({ sales: [] });
+      // IMPORTANT: for transfers/purchases, a magasin must see rows where it is either:
+      // - destination (store_id)
+      // - OR source (source_store_id)
+      query = query.or(`store_id.eq.${myStoreId},source_store_id.eq.${myStoreId}`);
+    }
+
+    const { data, error } = await query;
+    if (error) {
+      console.error("/sales GET query error:", error);
+      throw error;
+    }
+
+    if (data && data.length > 0) {
+      allSales = allSales.concat(data);
+      hasMore = data.length === PAGE_SIZE;
+      page++;
+    } else {
+      hasMore = false;
+    }
   }
 
-      const { data, error } = await query;
-      if (error) {
-        console.error("/sales GET query error:", error);
-        throw error;
+  const sales = allSales;
+      
+      // DEBUG: Log sales data to identify day 27 issue
+      console.log('[BACKEND /sales GET] Total sales returned:', sales.length);
+      console.log('[BACKEND /sales GET] Sales by date:', sales.reduce((acc: Record<string, number>, s: any) => {
+        const saleDate = s.created_at ? new Date(s.created_at).toISOString().split('T')[0] : 'unknown';
+        acc[saleDate] = (acc[saleDate] || 0) + 1;
+        return acc;
+      }, {}));
+      
+      // Check specifically for day 27
+      const day27Sales = sales.filter((s: any) => {
+        const saleDate = s.created_at ? new Date(s.created_at) : null;
+        return saleDate && saleDate.getDate() === 27;
+      });
+      console.log('[BACKEND /sales GET] Day 27 sales count:', day27Sales.length);
+      if (day27Sales.length > 0) {
+        console.log('[BACKEND /sales GET] Day 27 sales details:', day27Sales.map((s: any) => ({
+          id: s.id,
+          sale_number: s.sale_number,
+          created_at: s.created_at,
+          store_id: s.store_id,
+          source_store_id: s.source_store_id,
+        })));
       }
-
-      const sales = data || [];
+      
+      // Log all sales with their dates for debugging
+      console.log('[BACKEND /sales GET] All sales dates:', sales.map((s: any) => ({
+        id: s.id,
+        sale_number: s.sale_number,
+        created_at: s.created_at,
+        date: s.created_at ? new Date(s.created_at).toISOString().split('T')[0] : 'unknown',
+        day: s.created_at ? new Date(s.created_at).getDate() : 'unknown',
+        store_id: s.store_id,
+      })));
 
       // Enrich with actor email + store names
       const userIds = Array.from(
@@ -7417,6 +7535,8 @@ if (!existingInv?.id) {
           store_name: storeId ? storesMap.get(storeId)?.name || null : null,
           source_store_name: sourceStoreId ? storesMap.get(sourceStoreId)?.name || null : null,
           created_for_store_name: createdForStoreId ? storesMap.get(createdForStoreId)?.name || null : null,
+          // Add stores object for frontend filtering compatibility
+          stores: storeId ? { id: storeId, name: storesMap.get(storeId)?.name || null } : null,
         };
       });
 

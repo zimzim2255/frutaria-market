@@ -30,6 +30,7 @@ export function SalesModule({ session }: SalesModuleProps) {
   const [userRole, setUserRole] = useState<string>('user');
   const [userPermissions, setUserPermissions] = useState<string[]>([]);
   const [selectedMagasinForAdmin, setSelectedMagasinForAdmin] = useState<string>('');
+  const [displayCount, setDisplayCount] = useState(100);
 
   // Table sorting (A→Z / Z→A + numeric)
   const [sortConfig, setSortConfig] = useState<{ key: 'sale_number' | 'client_name' | 'store_name' | 'total_amount' | 'payment_status' | 'delivery_status' | 'created_at' | null; direction: 'asc' | 'desc' }>({
@@ -832,8 +833,9 @@ export function SalesModule({ session }: SalesModuleProps) {
       const selectedId = String(selectedMagasinForAdmin);
       const saleStoreId = sale?.store_id != null ? String(sale.store_id) : '';
       const relatedStoreId = sale?.stores?.id != null ? String(sale.stores.id) : '';
+      const sourceStoreId = sale?.source_store_id != null ? String(sale.source_store_id) : '';
 
-      const matchesSelectedStore = saleStoreId === selectedId || relatedStoreId === selectedId;
+      const matchesSelectedStore = saleStoreId === selectedId || relatedStoreId === selectedId || sourceStoreId === selectedId;
 
       // Debug admin filtering issues (log once per selectedId+saleId to avoid console spam)
       if (!matchesSelectedStore) {
@@ -1415,7 +1417,7 @@ export function SalesModule({ session }: SalesModuleProps) {
                       </TableCell>
                     </TableRow>
                   ) : (
-                    sortedSales.map((sale) => (
+                    sortedSales.slice(0, displayCount).map((sale) => (
                       <TableRow key={sale.id}>
                         <TableCell className="font-medium">
                           <div className="flex items-center gap-2">
@@ -1747,6 +1749,19 @@ export function SalesModule({ session }: SalesModuleProps) {
                   )}
                 </TableBody>
               </Table>
+              
+              {/* Load More Button */}
+              {sortedSales.length > displayCount && (
+                <div className="flex justify-center mt-4">
+                  <Button
+                    onClick={() => setDisplayCount(prev => prev + 100)}
+                    variant="outline"
+                    className="px-6 py-2"
+                  >
+                    Charger plus ({sortedSales.length - displayCount} restantes)
+                  </Button>
+                </div>
+              )}
             </div>
           )}
         </div>

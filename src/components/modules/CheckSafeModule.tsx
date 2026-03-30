@@ -6,7 +6,7 @@ import { Input } from '../ui/input';
 import { Label } from '../ui/label';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../ui/table';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '../ui/dialog';
-import { Search, Lock, CheckCircle, AlertTriangle, TrendingUp, Clock, Shield, Eye, Trash2, Plus, Download, FileText } from 'lucide-react';
+import { Search, Lock, CheckCircle, AlertTriangle, TrendingUp, Clock, Shield, Eye, Trash2, Plus, Download, FileText, Edit } from 'lucide-react';
 import { Badge } from '../ui/badge';
 import { Checkbox } from '../ui/checkbox';
 import { toast } from 'sonner';
@@ -224,6 +224,15 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
 
   // Export dropdown state
   const [exportDropdownOpen, setExportDropdownOpen] = useState(false);
+
+  // Edit movement state
+  const [editMovementDialogOpen, setEditMovementDialogOpen] = useState(false);
+  const [editingMovement, setEditingMovement] = useState<any>(null);
+  const [editMovementAmount, setEditMovementAmount] = useState('');
+  const [editMovementReason, setEditMovementReason] = useState('');
+  const [editMovementNotes, setEditMovementNotes] = useState('');
+  const [editMovementDate, setEditMovementDate] = useState<string>('');
+  const [editMovementSubmitting, setEditMovementSubmitting] = useState(false);
 
   // Global payment dialog state
   const [globalPaymentDialogOpen, setGlobalPaymentDialogOpen] = useState(false);
@@ -5191,6 +5200,19 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
           </CardTitle>
         </CardHeader>
         <CardContent>
+          {/* Search bar for movements */}
+          <div className="mb-4">
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
+              <Input
+                placeholder="Rechercher dans les mouvements (motif, référence, type)..."
+                className="pl-10"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+              />
+            </div>
+          </div>
+          
           {cofferMovementsLoading ? (
             <div className="text-center py-6 text-gray-500">Chargement...</div>
           ) : cofferMovements.length === 0 ? (
@@ -5205,10 +5227,23 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
                     <TableHead>Motif</TableHead>
                     <TableHead>Référence</TableHead>
                     <TableHead className="text-right">Montant</TableHead>
+                    <TableHead className="text-center">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {cofferMovements.map((m: any) => {
+                  {cofferMovements
+                    .filter((m: any) => {
+                      const q = String(searchTerm || '').toLowerCase();
+                      if (!q) return true;
+                      
+                      const reason = String(m.reason || '').toLowerCase();
+                      const notes = String(m.notes || '').toLowerCase();
+                      const expenseType = String(m.expense_type || '').toLowerCase();
+                      const amount = String(m.amount || '').toLowerCase();
+                      
+                      return reason.includes(q) || notes.includes(q) || expenseType.includes(q) || amount.includes(q);
+                    })
+                    .map((m: any) => {
                     const type = normalizeMovementType(m.expense_type);
                     const isDeposit = isDepositType(type);
                     return (
@@ -5228,6 +5263,24 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
                         <TableCell className={`text-right font-semibold ${isDeposit ? 'text-green-600' : 'text-red-600'}`}>
                           {isDeposit ? '+' : '-'}{Number(m.amount || 0).toFixed(2)} MAD
                         </TableCell>
+                        <TableCell className="text-center">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => {
+                              setEditingMovement(m);
+                              setEditMovementAmount(String(m.amount || ''));
+                              setEditMovementReason(m.reason || '');
+                              setEditMovementNotes(m.notes || '');
+                              setEditMovementDate(m.payment_date || '');
+                              setEditMovementDialogOpen(true);
+                            }}
+                            disabled={!canEditCoffreEntry}
+                            title={!canEditCoffreEntry ? "Vous n'avez pas la permission « Modifier une Entrée Coffre »" : "Modifier"}
+                          >
+                            <Edit className="w-4 h-4" />
+                          </Button>
+                        </TableCell>
                       </TableRow>
                     );
                   })}
@@ -5238,6 +5291,138 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
         </CardContent>
       </Card>
       )}
+
+      {/* Edit Movement Dialog */}
+      <Dialog open={editMovementDialogOpen} onOpenChange={setEditMovementDialogOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Modifier le Mouvement</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label>Montant (MAD) *</Label>
+              <Input
+                type="number"
+                placeholder="0.00"
+                value={editMovementAmount}
+                onChange={(e) => setEditMovementAmount(e.target.value)}
+              />
+              <p className="text-xs text-gray-500">Le montant peut être positif ou négatif</p>
+            </div>
+
+            <div className="space-y-2">
+              <Label>Raison (optionnel)</Label>
+              <Input
+                placeholder="Ex: Versement caisse journée..."
+                value={editMovementReason}
+                onChange={(e) => setEditMovementReason(e.target.value)}
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label>Notes (optionnel)</Label>
+              <Input
+                placeholder="Ex: détails, référence, ..."
+                value={editMovementNotes}
+                onChange={(e) => setEditMovementNotes(e.target.value)}
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label>Date du Mouvement (optionnel)</Label>
+              <Input
+                type="date"
+                value={editMovementDate}
+                onChange={(e) => setEditMovementDate(e.target.value)}
+              />
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2">
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setEditMovementDialogOpen(false);
+                  setEditingMovement(null);
+                }}
+                disabled={editMovementSubmitting}
+              >
+                Annuler
+              </Button>
+              <Button
+                style={{ backgroundColor: '#0ea5e9', color: '#ffffff' }}
+                className="hover:opacity-90 text-white font-semibold"
+                disabled={editMovementSubmitting}
+                onClick={async () => {
+                  if (!canEditCoffreEntry) {
+                    toast.error("Vous n'avez pas la permission « Modifier une Entrée Coffre »");
+                    return;
+                  }
+
+                  const amount = Number(editMovementAmount);
+                  if (!Number.isFinite(amount)) {
+                    toast.error('Veuillez entrer un montant valide');
+                    return;
+                  }
+
+                  if (!editingMovement?.id) {
+                    toast.error('Aucun mouvement sélectionné pour la modification');
+                    return;
+                  }
+
+                  try {
+                    setEditMovementSubmitting(true);
+
+                    const payload: any = {
+                      id: editingMovement.id,
+                      amount,
+                      reason: editMovementReason || null,
+                      notes: editMovementNotes || null,
+                      payment_date: editMovementDate || null,
+                    };
+
+                    const res = await fetch(
+                      `https://${projectId}.supabase.co/functions/v1/super-handler/coffer-movements`,
+                      {
+                        method: 'PUT',
+                        headers: {
+                          Authorization: `Bearer ${session.access_token}`,
+                          'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify(payload),
+                      }
+                    );
+
+                    const data = await res.json().catch(() => ({}));
+                    if (!res.ok) {
+                      toast.error(data?.error || 'Erreur lors de la modification');
+                      return;
+                    }
+
+                    toast.success('Mouvement modifié avec succès');
+
+                    setEditMovementDialogOpen(false);
+                    setEditingMovement(null);
+                    setEditMovementAmount('');
+                    setEditMovementReason('');
+                    setEditMovementNotes('');
+                    setEditMovementDate('');
+
+                    // Refresh history
+                    fetchCofferMovements(selectedCofferId);
+                  } catch (e: any) {
+                    console.error(e);
+                    toast.error(e?.message || 'Erreur');
+                  } finally {
+                    setEditMovementSubmitting(false);
+                  }
+                }}
+              >
+                {editMovementSubmitting ? 'Modification...' : 'Modifier'}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {activeView === 'checks' && (
       /* Main Checks Safe Table - Bank Style */

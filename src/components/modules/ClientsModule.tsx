@@ -26,6 +26,29 @@ export function ClientsModule({ session }: ClientsModuleProps) {
   const [clients, setClients] = useState<any[]>([]);
   const [currentStore, setCurrentStore] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [countdown, setCountdown] = useState<number>(0);
+  const [isButtonDisabled, setIsButtonDisabled] = useState<boolean>(false);
+  
+  // Countdown effect while loading
+  useEffect(() => {
+    if (loading) {
+      setCountdown(3);
+      const countdownInterval = setInterval(() => {
+        setCountdown((prev) => {
+          if (prev <= 1) {
+            clearInterval(countdownInterval);
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+      
+      return () => clearInterval(countdownInterval);
+    } else {
+      setCountdown(0);
+      setIsButtonDisabled(false);
+    }
+  }, [loading]);
 
   const [currentUserRole, setCurrentUserRole] = useState<string>('user');
   const [currentUserPermissions, setCurrentUserPermissions] = useState<string[]>([]);
@@ -781,6 +804,10 @@ export function ClientsModule({ session }: ClientsModuleProps) {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    // Immediately disable button on first click to prevent multiple clicks
+    if (isButtonDisabled || loading) return;
+    setIsButtonDisabled(true);
 
     if (!editingClient && !canAddClient) {
       toast.error("Vous n'avez pas la permission « Ajouter un Client »");
@@ -3009,8 +3036,8 @@ export function ClientsModule({ session }: ClientsModuleProps) {
                     <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>
                       Annuler
                     </Button>
-                    <Button type="submit" disabled={loading}>
-                      {loading ? 'Enregistrement...' : 'Enregistrer'}
+                    <Button type="submit" disabled={isButtonDisabled || loading}>
+                      {loading ? `Enregistrement ${countdown}...` : isButtonDisabled ? 'Enregistrement...' : 'Enregistrer'}
                     </Button>
                   </div>
                 </form>

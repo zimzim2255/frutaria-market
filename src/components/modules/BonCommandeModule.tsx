@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { Label } from '../ui/label';
@@ -114,6 +114,8 @@ export default function BonCommandeModule({ session, onBack, sale, adminSelected
   const [additionalPaymentDialogOpen, setAdditionalPaymentDialogOpen] = useState(false);
   const [blId, setBlId] = useState<string>('');
   const [customBlId, setCustomBlId] = useState<string>('');
+  // Track original caisse values when editing an order to calculate stock adjustments
+  const [originalCaisseValues, setOriginalCaisseValues] = useState<{ [itemId: string]: number }>({});
 
   // Generate auto BL ID on component mount using a concurrency-safe server-side counter.
   // This avoids duplicates across devices/users and removes localStorage reliance.
@@ -517,6 +519,18 @@ export default function BonCommandeModule({ session, onBack, sale, adminSelected
         
         console.log('All mapped items:', JSON.stringify(mappedItems, null, 2));
         
+        // Populate original caisse values for stock synchronization
+        const initialCaisseValues: { [itemId: string]: number } = {};
+        mappedItems.forEach((item: any) => {
+          if (item.id && item.caisse !== undefined) {
+            const caisseNum = parseFloat(String(item.caisse).replace(',', '.'));
+            if (Number.isFinite(caisseNum)) {
+              initialCaisseValues[item.id] = caisseNum;
+            }
+          }
+        });
+        setOriginalCaisseValues(initialCaisseValues);
+        
         // Populate client info from sale
         setSelectedClientId(sale.client_id ?? null);
         
@@ -609,6 +623,45 @@ export default function BonCommandeModule({ session, onBack, sale, adminSelected
     return Math.max(0, availableStock - usedStock);
   };
 
+  // Function to update product stock via API
+  const updateProductStock = async (productId: string, quantityDelta: number) => {
+    if (!productId || quantityDelta === 0) {
+      console.log('[BonCommandeModule] Skipping stock update:', { productId, quantityDelta });
+      return;
+    }
+    
+    console.log('[BonCommandeModule] Updating product stock:', { productId, quantityDelta, storeId: adminSelectedMagasinId });
+    
+    try {
+      const response = await fetch(
+        `https://${projectId}.supabase.co/functions/v1/super-handler/products/${productId}/stock`,
+        {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${session?.access_token}`,
+          },
+          body: JSON.stringify({
+            quantity_delta: quantityDelta,
+            store_id: adminSelectedMagasinId || null,
+          }),
+        }
+      );
+      
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => '');
+        console.error('[BonCommandeModule] Failed to update product stock:', response.status, errorText);
+        toast.error('Erreur lors de la mise à jour du stock');
+      } else {
+        const result = await response.json().catch(() => null);
+        console.log('[BonCommandeModule] Stock updated successfully:', result);
+      }
+    } catch (error) {
+      console.error('[BonCommandeModule] Error updating product stock:', error);
+      toast.error('Erreur lors de la mise à jour du stock');
+    }
+  };
+
   const handleItemChange = (id: string, field: keyof OrderItem, value: string | number): void => {
     // If changing moyenne, validate against template sulphate (fallback product)
     if (field === 'moyenne') {
@@ -629,6 +682,31 @@ export default function BonCommandeModule({ session, onBack, sale, adminSelected
         if (max !== null && moyenneValue > Number(max)) {
           toast.error(`❌ Moyenne maximale: ${max}`);
           return;
+        }
+      }
+    }
+
+    // Handle caisse changes with stock synchronization
+    if (field === 'caisse') {
+      const item = orderData.items.find(i => i.id === id);
+      if (item && item.product_id) {
+        const newCaisse = typeof value === 'string'
+          ? parseFloat(String(value).replace(',', '.'))
+          : Number(value);
+        const oldCaisse = originalCaisseValues[id] ?? (parseFloat(item.caisse) || 0);
+        const caisseDelta = newCaisse - oldCaisse;
+        
+        // Update stock if caisse changed
+        if (caisseDelta !== 0) {
+          // If caisse decreased, add back to stock (positive delta)
+          // If caisse increased, subtract from stock (negative delta)
+          updateProductStock(item.product_id, -caisseDelta);
+          
+          // Update original caisse for this item
+          setOriginalCaisseValues(prev => ({
+            ...prev,
+            [id]: newCaisse,
+          }));
         }
       }
     }
@@ -681,12 +759,35 @@ export default function BonCommandeModule({ session, onBack, sale, adminSelected
       ...orderData,
       items: [...orderData.items, newItem],
     });
+    // Track original caisse for new item (starts at 0)
+    setOriginalCaisseValues(prev => ({
+      ...prev,
+      [newItem.id]: 0,
+    }));
   };
 
   const removeItem = (id: string): void => {
+    const itemToRemove = orderData.items.find(item => item.id === id);
+    
+    // Restore stock when removing an item
+    if (itemToRemove && itemToRemove.product_id) {
+      const caisseNum = parseFloat(itemToRemove.caisse) || 0;
+      if (caisseNum > 0) {
+        // Add back the caisse to stock (positive delta)
+        updateProductStock(itemToRemove.product_id, caisseNum);
+      }
+    }
+    
     setOrderData({
       ...orderData,
       items: orderData.items.filter((item) => item.id !== id),
+    });
+    
+    // Remove from originalCaisseValues tracking
+    setOriginalCaisseValues(prev => {
+      const newCaisseValues = { ...prev };
+      delete newCaisseValues[id];
+      return newCaisseValues;
     });
   };
 
@@ -748,9 +849,9 @@ export default function BonCommandeModule({ session, onBack, sale, adminSelected
         if (!item.caisse?.toString().trim() || !Number.isFinite(caisseNum) || caisseNum <= 0) errors.push(`${prefix}: Caisse`);
         if (!Number.isFinite(qtyNum) || qtyNum <= 0) errors.push(`${prefix}: Quantité`);
         if (!item.moyenne?.toString().trim() || !Number.isFinite(moyenneNum) || moyenneNum <= 0) errors.push(`${prefix}: Moyenne`);
-        if (!Number.isFinite(unitNum) || unitNum <= 0) errors.push(`${prefix}: Prix Unitaire`);
+        if (!Number.isFinite(unitNum) || unitNum < 0) errors.push(`${prefix}: Prix Unitaire`);
         // Subtotal is computed, but still validate it to avoid empty/0 lines
-        if (!Number.isFinite(subNum) || subNum <= 0) errors.push(`${prefix}: Sous-total`);
+        if (!Number.isFinite(subNum) || subNum < 0) errors.push(`${prefix}: Sous-total`);
       });
     }
 
@@ -768,11 +869,11 @@ export default function BonCommandeModule({ session, onBack, sale, adminSelected
         errors.push('Montant Payé');
       }
     } else if (orderData.status === 'Partiellement payée') {
-      if (!Number.isFinite(paid) || paid <= 0 || paid >= totals.total) {
+      if (!Number.isFinite(paid) || paid < 0 || paid >= totals.total) {
         errors.push('Montant Payé');
       }
     } else if (orderData.status === 'Payée') {
-      if (!Number.isFinite(paid) || paid <= 0) {
+      if (!Number.isFinite(paid) || paid < 0) {
         errors.push('Montant Payé');
       }
     }
