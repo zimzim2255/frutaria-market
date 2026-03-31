@@ -697,9 +697,9 @@ export function SalesModule({ session }: SalesModuleProps) {
         clientEmail: (sale as any).client_phone || '',
         clientAddress: (sale as any).client_address || '',
         clientICE: (sale as any).client_ice || '',
-        invoiceDate: new Date(sale.created_at).toISOString().split('T')[0],
-        executionDate: new Date(sale.created_at).toISOString().split('T')[0],
-        date: new Date(sale.created_at).toISOString().split('T')[0],
+        invoiceDate: sale.invoice_date || new Date(sale.created_at).toISOString().split('T')[0],
+        executionDate: sale.execution_date || new Date(sale.created_at).toISOString().split('T')[0],
+        date: sale.invoice_date || new Date(sale.created_at).toISOString().split('T')[0],
         items: items.map((it: any) => ({ name: it.name, description: it.description, quantity: it.quantity, unitPrice: it.unitPrice, total: it.total })),
         notes: '',
         paymentHeaderNote: `Statut: ${getPaymentStatusLabel(sale.payment_status)}`,
@@ -960,7 +960,7 @@ export function SalesModule({ session }: SalesModuleProps) {
       },
     },
     { header: 'Livraison', accessor: (s) => s.delivery_status || '-' },
-    { header: 'Date', accessor: (s) => new Date(s.created_at).toLocaleDateString('fr-FR'), cellWidth: 18 },
+    { header: 'Date', accessor: (s) => (s as any).execution_date ? new Date((s as any).execution_date).toLocaleDateString('fr-FR') : new Date(s.created_at).toLocaleDateString('fr-FR'), cellWidth: 18 },
     {
       header: 'Créé\npar',
       accessor: (s) => {
@@ -1475,7 +1475,7 @@ export function SalesModule({ session }: SalesModuleProps) {
                             {sale.delivery_status}
                           </span>
                         </TableCell>
-                        <TableCell>{new Date(sale.created_at).toLocaleDateString('fr-FR')}</TableCell>
+                        <TableCell>{sale.execution_date ? new Date(sale.execution_date).toLocaleDateString('fr-FR') : new Date(sale.created_at).toLocaleDateString('fr-FR')}</TableCell>
                         <TableCell className="text-right">
                           <div className="flex gap-2 justify-end items-center">
                             {sale.delivery_status === 'preparing' && canEditSale && (
@@ -1595,7 +1595,7 @@ export function SalesModule({ session }: SalesModuleProps) {
                                   </div>
                                   <div className="bg-gray-50 p-3 rounded border">
                                     <Label className="text-xs font-semibold text-gray-600 uppercase">Date</Label>
-                                    <p className="font-medium text-gray-900">{new Date(selectedSale?.created_at).toLocaleDateString('fr-FR')}</p>
+                                    <p className="font-medium text-gray-900">{(selectedSale as any)?.execution_date ? new Date((selectedSale as any).execution_date).toLocaleDateString('fr-FR') : new Date(selectedSale?.created_at).toLocaleDateString('fr-FR')}</p>
                                   </div>
                                   <div className="bg-gray-50 p-3 rounded border">
                                     <Label className="text-xs font-semibold text-gray-600 uppercase">Méthode de paiement</Label>

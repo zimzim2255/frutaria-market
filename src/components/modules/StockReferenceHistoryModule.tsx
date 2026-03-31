@@ -8,6 +8,7 @@ import { toast } from 'sonner';
 import { Label } from '../ui/label';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../ui/table';
 import { StockReferenceExportButtons } from './StockReferenceExportButtons';
+import { StockReferenceGroupsExportButtons } from './StockReferenceGroupsExportButtons';
 
 interface ProductAddition {
   id: string;
@@ -2003,7 +2004,60 @@ export default function StockReferenceHistoryModule({ session }: { session: any 
       {/* Stock Reference Groups Table */}
       <Card>
         <CardHeader>
-          <CardTitle>📦 Groupes par Référence de Stock</CardTitle>
+          <div className="flex items-center justify-between">
+            <CardTitle>📦 Groupes par Référence de Stock</CardTitle>
+            {(() => {
+              // Compute groups for export (same logic as display)
+              const stockRefGroupsForExport = filteredAdditions
+                .filter(a => a.stock_reference)
+                .reduce((acc: { [key: string]: StockReferenceGroup }, product) => {
+                  const ref = product.stock_reference || 'N/A';
+                  if (!acc[ref]) {
+                    acc[ref] = {
+                      stock_reference: ref,
+                      products: [],
+                      supplier_name: '-',
+                      total_quantity: 0,
+                      total_value: 0,
+                      product_count: 0,
+                    };
+                  }
+                  acc[ref].products.push(product);
+                  acc[ref].total_quantity += product.quantity_added;
+                  acc[ref].total_value += product.total_value;
+                  acc[ref].product_count += 1;
+                  return acc;
+                }, {});
+
+              const groupsForExport = Object.values(stockRefGroupsForExport).map((g) => ({
+                stock_reference: g.stock_reference,
+                supplier_name: pickGroupSupplierName(g.products, stockRefSupplierNameByRef[g.stock_reference]),
+                product_count: g.product_count,
+                total_quantity: g.total_quantity,
+                total_value: g.total_value,
+                date_operation: (() => {
+                  const dates = g.products.map(p => new Date(p.created_at)).filter(d => !isNaN(d.getTime()));
+                  if (dates.length === 0) return '-';
+                  const mostRecent = new Date(Math.max(...dates.map(d => d.getTime())));
+                  return mostRecent.toLocaleDateString('fr-FR');
+                })(),
+              }));
+
+              return (
+                <StockReferenceGroupsExportButtons
+                  groups={groupsForExport}
+                  filters={{
+                    searchTerm,
+                    startDate,
+                    endDate,
+                    filterSupplier,
+                    filterCategory,
+                    filterStore,
+                  }}
+                />
+              );
+            })()}
+          </div>
         </CardHeader>
         <CardContent>
           {(() => {

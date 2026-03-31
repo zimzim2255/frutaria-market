@@ -234,6 +234,11 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
   const [editMovementDate, setEditMovementDate] = useState<string>('');
   const [editMovementSubmitting, setEditMovementSubmitting] = useState(false);
 
+  // Delete movement state
+  const [deleteMovementDialogOpen, setDeleteMovementDialogOpen] = useState(false);
+  const [deletingMovement, setDeletingMovement] = useState<any>(null);
+  const [deleteMovementSubmitting, setDeleteMovementSubmitting] = useState(false);
+
   // Global payment dialog state
   const [globalPaymentDialogOpen, setGlobalPaymentDialogOpen] = useState(false);
   const [globalPaymentSelectedMagasin, setGlobalPaymentSelectedMagasin] = useState<any>(null);
@@ -5264,22 +5269,37 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
                           {isDeposit ? '+' : '-'}{Number(m.amount || 0).toFixed(2)} MAD
                         </TableCell>
                         <TableCell className="text-center">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => {
-                              setEditingMovement(m);
-                              setEditMovementAmount(String(m.amount || ''));
-                              setEditMovementReason(m.reason || '');
-                              setEditMovementNotes(m.notes || '');
-                              setEditMovementDate(m.payment_date || '');
-                              setEditMovementDialogOpen(true);
-                            }}
-                            disabled={!canEditCoffreEntry}
-                            title={!canEditCoffreEntry ? "Vous n'avez pas la permission « Modifier une Entrée Coffre »" : "Modifier"}
-                          >
-                            <Edit className="w-4 h-4" />
-                          </Button>
+                          <div className="flex items-center justify-center gap-1">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => {
+                                setEditingMovement(m);
+                                setEditMovementAmount(String(m.amount || ''));
+                                setEditMovementReason(m.reason || '');
+                                setEditMovementNotes(m.notes || '');
+                                setEditMovementDate(m.payment_date || '');
+                                setEditMovementDialogOpen(true);
+                              }}
+                              disabled={!canEditCoffreEntry}
+                              title={!canEditCoffreEntry ? "Vous n'avez pas la permission « Modifier une Entrée Coffre »" : "Modifier"}
+                            >
+                              <Edit className="w-4 h-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => {
+                                setDeletingMovement(m);
+                                setDeleteMovementDialogOpen(true);
+                              }}
+                              disabled={!canDeleteCoffreEntry}
+                              title={!canDeleteCoffreEntry ? "Vous n'avez pas la permission « Supprimer une Entrée Coffre »" : "Supprimer"}
+                              className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </Button>
+                          </div>
                         </TableCell>
                       </TableRow>
                     );
@@ -5418,6 +5438,111 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
                 }}
               >
                 {editMovementSubmitting ? 'Modification...' : 'Modifier'}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Movement Confirmation Dialog */}
+      <Dialog open={deleteMovementDialogOpen} onOpenChange={setDeleteMovementDialogOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Confirmer la Suppression</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-gray-600">
+              Êtes-vous sûr de vouloir supprimer ce mouvement ?
+            </p>
+            {deletingMovement && (
+              <div className="bg-gray-50 p-3 rounded-lg space-y-2">
+                <div className="flex justify-between text-sm">
+                  <span className="text-gray-500">Date:</span>
+                  <span className="font-medium">
+                    {deletingMovement.payment_date || deletingMovement.created_at
+                      ? new Date(deletingMovement.payment_date || deletingMovement.created_at).toLocaleString('fr-FR')
+                      : '-'}
+                  </span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-gray-500">Type:</span>
+                  <span className="font-medium">{deletingMovement.expense_type || '-'}</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-gray-500">Motif:</span>
+                  <span className="font-medium">{deletingMovement.reason || '-'}</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-gray-500">Montant:</span>
+                  <span className="font-semibold text-red-600">
+                    {Number(deletingMovement.amount || 0).toFixed(2)} MAD
+                  </span>
+                </div>
+              </div>
+            )}
+            <p className="text-xs text-red-600">
+              Cette action est irréversible.
+            </p>
+            <div className="flex justify-end gap-2 pt-2">
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setDeleteMovementDialogOpen(false);
+                  setDeletingMovement(null);
+                }}
+                disabled={deleteMovementSubmitting}
+              >
+                Annuler
+              </Button>
+              <Button
+                variant="destructive"
+                disabled={deleteMovementSubmitting}
+                onClick={async () => {
+                  if (!canDeleteCoffreEntry) {
+                    toast.error("Vous n'avez pas la permission « Supprimer une Entrée Coffre »");
+                    return;
+                  }
+
+                  if (!deletingMovement?.id) {
+                    toast.error('Aucun mouvement sélectionné pour la suppression');
+                    return;
+                  }
+
+                  try {
+                    setDeleteMovementSubmitting(true);
+
+                    const res = await fetch(
+                      `https://${projectId}.supabase.co/functions/v1/super-handler/coffer-movements?id=${deletingMovement.id}`,
+                      {
+                        method: 'DELETE',
+                        headers: {
+                          Authorization: `Bearer ${session.access_token}`,
+                        },
+                      }
+                    );
+
+                    const data = await res.json().catch(() => ({}));
+                    if (!res.ok) {
+                      toast.error(data?.error || 'Erreur lors de la suppression');
+                      return;
+                    }
+
+                    toast.success('Mouvement supprimé avec succès');
+
+                    setDeleteMovementDialogOpen(false);
+                    setDeletingMovement(null);
+
+                    // Refresh history
+                    fetchCofferMovements(selectedCofferId);
+                  } catch (e: any) {
+                    console.error(e);
+                    toast.error(e?.message || 'Erreur');
+                  } finally {
+                    setDeleteMovementSubmitting(false);
+                  }
+                }}
+              >
+                {deleteMovementSubmitting ? 'Suppression...' : 'Supprimer'}
               </Button>
             </div>
           </div>

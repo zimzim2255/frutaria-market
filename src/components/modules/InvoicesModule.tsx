@@ -300,7 +300,7 @@ export default function InvoicesModule({ session }: { session: any }) {
       queryParams.append('clientPhone', invoice.client_phone || '');
       queryParams.append('clientAddress', invoice.client_address || '');
       queryParams.append('clientICE', invoice.client_ice || '');
-      queryParams.append('date', new Date(invoice.created_at).toISOString().split('T')[0]);
+      queryParams.append('date', new Date(invoice.invoice_date || invoice.created_at).toISOString().split('T')[0]);
       // Normalize items so the PDF template always gets a usable row total.
       const pdfItems = items.map((it: any) => {
         const unitPrice = it?.unitPrice ?? it?.unit_price ?? it?.price ?? 0;

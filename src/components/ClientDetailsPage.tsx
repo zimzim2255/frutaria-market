@@ -228,7 +228,7 @@ export function ClientDetailsPage({ client, session, onBack }: ClientDetailsPage
       });
 
       const filteredSales = allSales.filter((s: any) => {
-        const d = new Date(s.created_at);
+        const d = new Date(s.execution_date || s.created_at);
         return d >= start && d <= end;
       });
 
@@ -855,7 +855,7 @@ export function ClientDetailsPage({ client, session, onBack }: ClientDetailsPage
       queryParams.append('clientPhone', invoice.client_phone || '');
       queryParams.append('clientAddress', invoice.client_address || '');
       queryParams.append('clientICE', invoice.client_ice || '');
-      queryParams.append('date', new Date(invoice.created_at).toISOString().split('T')[0]);
+      queryParams.append('date', new Date(invoice.invoice_date || invoice.created_at).toISOString().split('T')[0]);
       queryParams.append('items', JSON.stringify(invoice.items || []));
       queryParams.append('subtotal', invoice.total_amount.toString());
       queryParams.append('totalWithTVA', invoice.total_amount.toString());
@@ -918,6 +918,8 @@ export function ClientDetailsPage({ client, session, onBack }: ClientDetailsPage
       const subtotal = items.reduce((s: number, it: any) => s + (Number(it.total) || 0), 0);
 
       const dateStr = new Date(sale.created_at).toISOString().split('T')[0];
+      const invoiceDateStr = (sale as any).invoice_date || dateStr;
+      const executionDateStr = (sale as any).execution_date || dateStr;
       const clientName = sale?.client_name || sale?.stores?.name || 'Client';
       const clientAddress = sale?.client_address || '';
       const clientICE = sale?.client_ice || '';
@@ -931,9 +933,9 @@ export function ClientDetailsPage({ client, session, onBack }: ClientDetailsPage
       q.append('clientPhone', clientPhone);
       q.append('clientAddress', clientAddress);
       q.append('clientICE', clientICE);
-      q.append('invoiceDate', dateStr);
-      q.append('executionDate', dateStr);
-      q.append('date', dateStr);
+      q.append('invoiceDate', invoiceDateStr);
+      q.append('executionDate', executionDateStr);
+      q.append('date', invoiceDateStr);
       const remiseDoc =
         sale?.total_remise ??
         (sale as any)?.totalRemise ??
@@ -2469,7 +2471,7 @@ export function ClientDetailsPage({ client, session, onBack }: ClientDetailsPage
                     {sales.map((s) => (
                       <TableRow key={s.id}>
                         <TableCell className="font-mono text-sm">{s.sale_number}</TableCell>
-                        <TableCell>{new Date(s.created_at).toLocaleDateString('fr-FR')}</TableCell>
+                        <TableCell>{(s as any).execution_date ? new Date((s as any).execution_date).toLocaleDateString('fr-FR') : new Date(s.created_at).toLocaleDateString('fr-FR')}</TableCell>
                         <TableCell>{(Number(s.total_amount || 0) || 0).toFixed(2)} MAD</TableCell>
                         <TableCell className="text-amber-700">{(Number((s as any).total_remise ?? (s as any).totalRemise ?? 0) || 0).toFixed(2)} MAD</TableCell>
                         <TableCell>

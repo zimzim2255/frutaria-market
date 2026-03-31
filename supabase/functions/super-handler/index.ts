@@ -4567,6 +4567,45 @@ async function handler(req: Request): Promise<Response> {
     }
   }
 
+  if (path === "/coffer-movements" && method === "DELETE") {
+    try {
+      const url = new URL(req.url);
+      const movementId = url.searchParams.get('id')?.trim();
+      
+      if (!movementId) {
+        return jsonResponse({ error: "Movement ID is required" }, 400);
+      }
+
+      const currentUser = await getCurrentUserWithRole(req);
+      if (!currentUser) return jsonResponse({ error: "Unauthorized" }, 401);
+
+      // Verify the movement exists
+      const { data: existingMovement, error: fetchError } = await supabase
+        .from("expenses")
+        .select("*")
+        .eq("id", movementId)
+        .maybeSingle();
+
+      if (fetchError) throw fetchError;
+      if (!existingMovement) {
+        return jsonResponse({ error: "Movement not found" }, 404);
+      }
+
+      // Delete the movement
+      const { error: deleteError } = await supabase
+        .from("expenses")
+        .delete()
+        .eq("id", movementId);
+
+      if (deleteError) throw deleteError;
+
+      return jsonResponse({ success: true, message: "Movement deleted successfully" });
+    } catch (error: any) {
+      console.error("Error deleting coffer movement:", error);
+      return jsonResponse({ error: error.message }, 500);
+    }
+  }
+
   if (path === "/product-templates" && method === "POST") {
   try {
   const body = await req.json().catch(() => ({}));
@@ -7746,6 +7785,9 @@ if (!existingInv?.id) {
             client_patente: body.client_patente || null,
             payment_method: body.payment_method || null,
             remaining_balance: body.remaining_balance || 0,
+            // Save execution_date and invoice_date if provided
+            execution_date: body.execution_date || null,
+            invoice_date: body.invoice_date || null,
             // Track who created the BL and on behalf of which magasin (when admin is acting as magasin).
             created_by: currentUser?.id || null,
             created_by_role: currentUser?.role || null,

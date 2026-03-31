@@ -1063,7 +1063,7 @@ export function CashManagementPage({ session }: CashManagementPageProps) {
             if (paid > 0 && !isPaidOnlyByGlobalPayment) {
               allPayments.push({
                 id: `sale-${sale.id}`,
-                date: sale.created_at,
+                date: sale.execution_date || sale.created_at,
                 store_id: sale.store_id,
                 // Keep source store id so Caisse can show TRANSFER/PURCHASE to BOTH magasins.
                 source_store_id: (sale as any)?.source_store_id || null,
@@ -1102,7 +1102,7 @@ export function CashManagementPage({ session }: CashManagementPageProps) {
             if (shouldShowAccrual) {
               allPayments.push({
                 id: `sale-accrual-${sale.id}`,
-                date: sale.created_at,
+                date: sale.execution_date || sale.created_at,
                 store_id: sale.store_id,
                 // Keep source store id so Caisse can show TRANSFER/PURCHASE to BOTH magasins.
                 source_store_id: (sale as any)?.source_store_id || null,

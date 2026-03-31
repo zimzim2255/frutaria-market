@@ -184,7 +184,7 @@ export function SalesHistoryModule({ session }: SalesHistoryModuleProps) {
                     <td>${money(getSaleRemise(s))}</td>
                     <td>${safe(getPaymentStatusLabel(s.payment_status))}</td>
                     <td>${safe(getDeliveryStatusLabel(s.delivery_status))}</td>
-                    <td>${safe(new Date(s.created_at).toLocaleDateString('fr-FR'))}</td>
+                    <td>${safe((s as any).execution_date ? new Date((s as any).execution_date).toLocaleDateString('fr-FR') : new Date(s.created_at).toLocaleDateString('fr-FR'))}</td>
                   </tr>
                 `).join('')}
               </tbody>
@@ -233,7 +233,7 @@ export function SalesHistoryModule({ session }: SalesHistoryModuleProps) {
         `${getSaleRemise(s).toFixed(2)} MAD`,
         getPaymentStatusLabel(s.payment_status),
         getDeliveryStatusLabel(s.delivery_status),
-        new Date(s.created_at).toLocaleDateString('fr-FR'),
+        (s as any).execution_date ? new Date((s as any).execution_date).toLocaleDateString('fr-FR') : new Date(s.created_at).toLocaleDateString('fr-FR'),
       ]);
 
       autoTable(doc, {
@@ -451,7 +451,7 @@ export function SalesHistoryModule({ session }: SalesHistoryModuleProps) {
     
     let matchesDateRange = true;
     if (dateFrom || dateTo) {
-      const saleDate = new Date(sale.created_at);
+      const saleDate = new Date((sale as any).execution_date || sale.created_at);
       if (dateFrom) {
         const fromDate = new Date(dateFrom);
         matchesDateRange = matchesDateRange && saleDate >= fromDate;
@@ -595,9 +595,9 @@ export function SalesHistoryModule({ session }: SalesHistoryModuleProps) {
         clientEmail: (sale as any).client_phone || '',
         clientAddress: (sale as any).client_address || '',
         clientICE: (sale as any).client_ice || '',
-        invoiceDate: new Date(sale.created_at).toISOString().split('T')[0],
-        executionDate: new Date(sale.created_at).toISOString().split('T')[0],
-        date: new Date(sale.created_at).toISOString().split('T')[0],
+        invoiceDate: (sale as any).invoice_date || new Date(sale.created_at).toISOString().split('T')[0],
+        executionDate: (sale as any).execution_date || new Date(sale.created_at).toISOString().split('T')[0],
+        date: (sale as any).invoice_date || new Date(sale.created_at).toISOString().split('T')[0],
         items: items.map((it: any) => ({ name: it.name, description: it.description, quantity: it.quantity, unitPrice: it.unitPrice, total: it.total })),
         notes: '',
         paymentHeaderNote: `Statut: ${getPaymentStatusLabel(sale.payment_status)}`,
@@ -1124,7 +1124,7 @@ export function SalesHistoryModule({ session }: SalesHistoryModuleProps) {
                           </div>
                         </TableCell>
                         <TableCell className="text-sm">
-                          {new Date(sale.created_at).toLocaleDateString('fr-FR')}
+                          {(sale as any).execution_date ? new Date((sale as any).execution_date).toLocaleDateString('fr-FR') : new Date(sale.created_at).toLocaleDateString('fr-FR')}
                         </TableCell>
                         <TableCell className="text-right space-x-2">
                           <Button

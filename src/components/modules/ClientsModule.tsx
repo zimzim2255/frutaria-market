@@ -158,6 +158,7 @@ export function ClientsModule({ session }: ClientsModuleProps) {
   const [showZeroBalanceOnly, setShowZeroBalanceOnly] = useState(false);
   const [showNonZeroBalanceOnly, setShowNonZeroBalanceOnly] = useState(false);
   const [userRole, setUserRole] = useState<string>('user');
+  const [displayLimit, setDisplayLimit] = useState<number>(100);
 
   // Table sorting (A→Z / Z→A)
   const [sortConfig, setSortConfig] = useState<{ key: 'name' | 'phone' | 'total_invoiced' | 'total_paid' | 'total_remaining' | null; direction: 'asc' | 'desc' }>({
@@ -1145,6 +1146,9 @@ export function ClientsModule({ session }: ClientsModuleProps) {
       return 0;
     });
   })();
+
+  // Pagination: display only first `displayLimit` clients
+  const displayedClients = sortedClients.slice(0, displayLimit);
 
   // For export:
   // - Non-admin: export current filtered list
@@ -3221,7 +3225,7 @@ export function ClientsModule({ session }: ClientsModuleProps) {
                         </TableCell>
                       </TableRow>
                     ) : (
-                      sortedClients.map((client) => {
+                      displayedClients.map((client) => {
                         const financials = clientFinancials[client.id] || { totalInvoiced: 0, totalPaid: 0, totalRemaining: 0 };
                         const discountAmount = clientDiscounts[client.id] || 0;
                         const adjustedBalance = financials.totalInvoiced - financials.totalPaid - discountAmount;
@@ -3317,6 +3321,19 @@ export function ClientsModule({ session }: ClientsModuleProps) {
                     )}
                   </TableBody>
                 </Table>
+              </div>
+            )}
+
+            {/* Voir Plus Button */}
+            {displayLimit < sortedClients.length && (
+              <div className="flex justify-center mt-4">
+                <Button
+                  onClick={() => setDisplayLimit(prev => prev + 100)}
+                  variant="outline"
+                  className="px-6 py-2"
+                >
+                  Voir Plus ({sortedClients.length - displayLimit} restants)
+                </Button>
               </div>
             )}
           </div>
