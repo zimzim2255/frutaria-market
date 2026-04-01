@@ -141,6 +141,8 @@ export function ProductsModule({ session }: ProductsModuleProps) {
   const [allSales, setAllSales] = useState<any[]>([]);
   const [nextStockReference, setNextStockReference] = useState<string>('000001');
   const [customStockReference, setCustomStockReference] = useState<string>('');
+  // Custom operation date for product additions (optional, falls back to created_at if not set)
+  const [operationDate, setOperationDate] = useState<string>('');
   const [selectedEntrepotStoreId, setSelectedEntrepotStoreId] = useState<string | null>(null);
   const [selectedProducts, setSelectedProducts] = useState<Set<string>>(new Set());
   const [showPdfExportDialog, setShowPdfExportDialog] = useState(false);
@@ -865,6 +867,11 @@ export function ProductsModule({ session }: ProductsModuleProps) {
           // Add stock reference to payload
           payload.stock_reference = allocatedStockReference;
           
+          // Add custom operation date if provided
+          if (operationDate) {
+            payload.operation_date = operationDate;
+          }
+          
           if (article.reference) payload.reference = article.reference;
           if (article.name) payload.name = article.name;
           // IMPORTANT:
@@ -1001,6 +1008,9 @@ export function ProductsModule({ session }: ProductsModuleProps) {
 
                   // Include supplier_id when possible (resolved from stock_reference_details)
                   ...(resolvedSupplierId ? { supplier_id: resolvedSupplierId } : {}),
+
+                  // Include custom operation date if provided (for product_additions_history)
+                  ...(operationDate ? { operation_date: operationDate } : {}),
                 }),
               }
             );
@@ -1359,6 +1369,7 @@ export function ProductsModule({ session }: ProductsModuleProps) {
     setEditingProduct(null);
     setEditingProductRowId(null);
     setSelectedEntrepotStoreId(null);
+    setOperationDate('');
   };
 
   const handleEdit = (product: any) => {
@@ -2056,6 +2067,27 @@ export function ProductsModule({ session }: ProductsModuleProps) {
                 ? 'La référence de stock ne peut pas être modifiée après création'
                 : 'Prévisualisation: la référence affichée peut changer si un autre utilisateur enregistre avant vous. La référence finale est réservée au moment de l\'enregistrement et sera attribuée à tous les produits de ce lot'}
             </p>
+          </CardContent>
+        </Card>
+
+        {/* Custom Operation Date Input */}
+        <Card>
+          <CardHeader>
+            <CardTitle>📅 Date de l'Opération</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            <Label>Date personnalisée (optionnel)</Label>
+            <div className="space-y-2">
+              <Input
+                type="date"
+                value={operationDate}
+                onChange={(e) => setOperationDate(e.target.value)}
+                className="flex-1"
+              />
+              <p className="text-xs text-gray-500">
+                Laissez vide pour utiliser la date actuelle. Cette date sera affichée dans l'historique des ajouts de produits.
+              </p>
+            </div>
           </CardContent>
         </Card>
 

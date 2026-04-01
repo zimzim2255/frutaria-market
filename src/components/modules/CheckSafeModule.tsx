@@ -239,6 +239,12 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
   const [deletingMovement, setDeletingMovement] = useState<any>(null);
   const [deleteMovementSubmitting, setDeleteMovementSubmitting] = useState(false);
 
+  // Track original amounts for soft-deleted movements
+  const [softDeletedMovements, setSoftDeletedMovements] = useState<Map<string, { originalAmount: number, deletedAt: string }>>(new Map());
+
+  // Track edited movements with original and new amounts
+  const [editedMovements, setEditedMovements] = useState<Map<string, { originalAmount: number, newAmount: number, editedAt: string }>>(new Map());
+
   // Global payment dialog state
   const [globalPaymentDialogOpen, setGlobalPaymentDialogOpen] = useState(false);
   const [globalPaymentSelectedMagasin, setGlobalPaymentSelectedMagasin] = useState<any>(null);
@@ -1414,7 +1420,10 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
       const dateStr = now.toLocaleString('fr-FR');
 
       const movementsRows = (cofferMovements || []).map((m: any, i: number) => {
-        const amount = normalizeSignedAmount(m?.amount);
+        // Check if soft-deleted - if so, show 0.00 amount but keep the record in export
+        const notesStr = String(m?.notes || '');
+        const isSoftDeleted = notesStr.includes('[SUPPRIME]') || notesStr.includes('[SUPPRIMÉ]');
+        const amount = isSoftDeleted ? 0 : normalizeSignedAmount(m?.amount);
         const methodRaw = String(m?.method || m?.payment_method || '').trim().toLowerCase();
         const methodLabel =
           methodRaw === 'cash' || methodRaw === 'espece' || methodRaw === 'espèce'
@@ -1430,14 +1439,78 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
         const notes = String(m?.notes || '-');
         const dateRaw = m?.payment_date || m?.created_at;
         const date = dateRaw ? new Date(dateRaw).toLocaleString('fr-FR') : '-';
+        
+        // Check if this movement was edited - parse from DB notes
+        const exportNotesStr = String(m?.notes || '');
+        const editMatch = exportNotesStr.match(/\[edited\]\s*Original:\s*([\d.]+)\s*MAD\s*→\s*New:\s*([\d.]+)\s*MAD/i);
+        const editedInfo = editedMovements.get(String(m.id));
+        
+        let displayNotes = exportNotesStr || '-';
+        let suiviModification = '-';
+        
+        if (editMatch) {
+          const dbOriginalAmount = parseFloat(editMatch[1]);
+          const dbNewAmount = parseFloat(editMatch[2]);
+          displayNotes = `Original: ${dbOriginalAmount.toFixed(2)} MAD - New: ${dbNewAmount.toFixed(2)} MAD`;
+          suiviModification = 'MODIFIE';
+        } else if (editedInfo) {
+          displayNotes = `Original: ${editedInfo.originalAmount.toFixed(2)} MAD - New: ${editedInfo.newAmount.toFixed(2)} MAD`;
+          suiviModification = 'MODIFIE';
+        }
+        
+        // Check if soft-deleted
+        const exportIsSoftDeleted = exportNotesStr.includes('[SUPPRIME]') || exportNotesStr.includes('[SUPPRIMÉ]');
+        if (exportIsSoftDeleted) {
+          suiviModification = 'SUPPRIME';
+          // Extract original amount from notes for deleted movements - try multiple patterns
+          let originalAmount: number | null = null;
+          
+          // Pattern 1: [SUPPRIMÉ] Montant original: XXX MAD
+          const match1 = exportNotesStr.match(/Montant original:\s*([\d,]+\.?\d*)/i);
+          if (match1) {
+            originalAmount = parseFloat(match1[1].replace(',', '.'));
+          }
+          
+          // Pattern 2: Look for amount before "Supprimé le"
+          if (originalAmount === null) {
+            const match2 = exportNotesStr.match(/([\d,]+\.?\d*)\s*MAD.*Supprimé/i);
+            if (match2) {
+              originalAmount = parseFloat(match2[1].replace(',', '.'));
+            }
+          }
+          
+          // Pattern 3: Try to get from the movement's original_amount field (stored in DB when deleted)
+          if (originalAmount === null) {
+            const dbOriginalAmount = Number(m?.original_amount ?? 0);
+            if (dbOriginalAmount > 0) {
+              originalAmount = dbOriginalAmount;
+            }
+          }
+          
+          // Pattern 4: Check local state for soft-deleted movements
+          if (originalAmount === null) {
+            const localDeletedInfo = softDeletedMovements.get(String(m.id));
+            if (localDeletedInfo) {
+              originalAmount = localDeletedInfo.originalAmount;
+            }
+          }
+          
+          if (originalAmount !== null) {
+            displayNotes = `Original: ${originalAmount.toFixed(2)} MAD`;
+          } else {
+            displayNotes = 'Supprimé';
+          }
+        }
+        
         return {
           index: i + 1,
           type,
           methode: String(methodLabel || '-'),
           montant: amount,
           raison: reason,
-          notes,
+          notes: displayNotes,
           date,
+          suivi_modification: suiviModification,
         };
       });
 
@@ -1457,6 +1530,8 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
             th, td { border: 1px solid #ddd; padding: 6px 8px; font-size: 12px; }
             th { background: #f3f4f6; text-align: left; }
             .num { text-align: right; }
+            .edited { color: #d97706; font-weight: bold; }
+            .deleted { color: #dc2626; font-weight: bold; }
           </style>
         </head>
         <body>
@@ -1473,6 +1548,7 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
                 <th>Raison</th>
                 <th>Notes</th>
                 <th>Date</th>
+                <th>Suivi Modification</th>
               </tr>
             </thead>
             <tbody>
@@ -1485,6 +1561,7 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
                   <td>${esc(r.raison)}</td>
                   <td>${esc(r.notes)}</td>
                   <td>${esc(r.date)}</td>
+                  <td class="${r.suivi_modification?.includes('MODIFIÉ') ? 'edited' : r.suivi_modification?.includes('SUPPRIMÉ') ? 'deleted' : ''}">${esc(r.suivi_modification)}</td>
                 </tr>
               `).join('')}
             </tbody>
@@ -1777,19 +1854,59 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
 
         const type = String(m?.expense_type || m?.type || '-');
         const reason = String(m?.reason || '-');
-        const notes = String(m?.notes || '-');
         const dateRaw = m?.payment_date || m?.created_at;
         const date = dateRaw ? new Date(dateRaw).toLocaleString('fr-FR') : '-';
-        return [String(i + 1), type, String(methodLabel || '-'), amount.toFixed(2), reason, notes, date];
+        
+        // Check if this movement was edited - parse from DB notes (case-insensitive)
+        const notesStr = String(m?.notes || '');
+        const editMatch = notesStr.match(/\[edited\]\s*Original:\s*([\d.]+)\s*MAD\s*→\s*New:\s*([\d.]+)\s*MAD/i);
+        const editedInfo = editedMovements.get(String(m.id));
+        
+        let displayNotes = '-';
+        let suiviModification = '-';
+        
+        if (editMatch) {
+          const dbOriginalAmount = parseFloat(editMatch[1]);
+          const dbNewAmount = parseFloat(editMatch[2]);
+          displayNotes = `Original: ${dbOriginalAmount.toFixed(2)} MAD - New: ${dbNewAmount.toFixed(2)} MAD`;
+          suiviModification = 'MODIFIE';
+        } else if (editedInfo) {
+          displayNotes = `Original: ${editedInfo.originalAmount.toFixed(2)} MAD - New: ${editedInfo.newAmount.toFixed(2)} MAD`;
+          suiviModification = 'MODIFIE';
+        }
+        
+        // Check if soft-deleted
+        const isSoftDeleted = notesStr.includes('[SUPPRIME]') || notesStr.includes('[SUPPRIMÉ]');
+        if (isSoftDeleted) {
+          suiviModification = 'SUPPRIME';
+        }
+        
+        return [String(i + 1), type, String(methodLabel || '-'), amount.toFixed(2), reason, displayNotes, date, suiviModification];
       });
 
       autoTable(doc, {
         startY: 24,
-        head: [['#', 'Type', 'Méthode', 'Montant (MAD)', 'Raison', 'Notes', 'Date']],
+        head: [['#', 'Type', 'Méthode', 'Montant (MAD)', 'Raison', 'Notes', 'Date', 'Suivi Modification']],
         body: rows,
-        styles: { fontSize: 8 },
+        styles: { fontSize: 7 },
         headStyles: { fillColor: [14, 165, 233] },
         theme: 'grid',
+        columnStyles: {
+          7: { cellWidth: 45, fontStyle: 'bold' },
+        },
+        didParseCell: function(data) {
+          // Highlight edited or deleted rows
+          if (data.section === 'body' && data.column.index === 7) {
+            const text = data.cell.raw;
+            if (text && String(text).includes('MODIFIÉ')) {
+              data.cell.styles.textColor = [217, 119, 6]; // amber
+              data.cell.styles.fontStyle = 'bold';
+            } else if (text && String(text).includes('SUPPRIMÉ')) {
+              data.cell.styles.textColor = [220, 38, 38]; // red
+              data.cell.styles.fontStyle = 'bold';
+            }
+          }
+        },
       });
 
       doc.save(`${title.replace(/\s+/g, '_')}_${now.toISOString().slice(0, 10)}.pdf`);
@@ -5251,22 +5368,100 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
                     .map((m: any) => {
                     const type = normalizeMovementType(m.expense_type);
                     const isDeposit = isDepositType(type);
+                    
+                    // Check if this movement has been soft-deleted
+                    const notesStr = String(m.notes || '');
+                    const isSoftDeleted = notesStr.includes('[SUPPRIMÉ]');
+                    
+                    // Extract original amount from notes if soft-deleted
+                    let originalAmount: number | null = null;
+                    if (isSoftDeleted) {
+                      const match = notesStr.match(/Montant original:\s*([\d,]+\.?\d*)/);
+                      if (match) {
+                        originalAmount = parseFloat(match[1].replace(',', '.'));
+                      }
+                    }
+                    
                     return (
-                      <TableRow key={m.id} className="hover:bg-gray-50">
-                        <TableCell className="text-sm">
+                      <TableRow 
+                        key={m.id} 
+                        className={isSoftDeleted 
+                          ? 'bg-red-500/20 hover:bg-red-500/30' 
+                          : 'hover:bg-gray-50'
+                        }
+                      >
+                        <TableCell className={`text-sm ${isSoftDeleted ? 'line-through text-gray-500' : ''}`}>
                           {m.payment_date || m.created_at
                             ? new Date(m.payment_date || m.created_at).toLocaleString('fr-FR')
                             : '-'}
                         </TableCell>
                         <TableCell className="text-sm">
-                          <Badge className={isDeposit ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}>
+                          <Badge className={isSoftDeleted 
+                            ? 'bg-gray-200 text-gray-500' 
+                            : (isDeposit ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800')
+                          }>
                             {m.expense_type || (isDeposit ? 'deposit' : 'expense')}
                           </Badge>
                         </TableCell>
-                        <TableCell className="text-sm">{m.reason || '-'}</TableCell>
-                        <TableCell className="text-sm">{m.notes || '-'}</TableCell>
-                        <TableCell className={`text-right font-semibold ${isDeposit ? 'text-green-600' : 'text-red-600'}`}>
-                          {isDeposit ? '+' : '-'}{Number(m.amount || 0).toFixed(2)} MAD
+                        <TableCell className={`text-sm ${isSoftDeleted ? 'line-through text-gray-500' : ''}`}>{m.reason || '-'}</TableCell>
+                        <TableCell className={`text-sm ${isSoftDeleted ? 'text-red-600 font-medium' : ''}`}>
+                          {isSoftDeleted ? (
+                            <div className="space-y-1">
+                              <div className="text-xs text-red-600 font-semibold">⚠️ SUPPRIMÉ</div>
+                              {originalAmount !== null && (
+                                <div className="text-xs text-gray-600">
+                                  Montant original: <span className="font-semibold">{originalAmount.toFixed(2)} MAD</span>
+                                </div>
+                              )}
+                            </div>
+                          ) : (() => {
+                            // Check if this movement was edited - read from DB notes (persisted)
+                            const notesStr = String(m.notes || '');
+                            const editMatch = notesStr.match(/\[EDITED\]\s*Original:\s*([\d.]+)\s*MAD\s*→\s*New:\s*([\d.]+)\s*MAD/);
+                            
+                            if (editMatch) {
+                              const dbOriginalAmount = parseFloat(editMatch[1]);
+                              const dbNewAmount = parseFloat(editMatch[2]);
+                              return (
+                                <div className="space-y-1">
+                                  <div className="text-xs text-amber-600 font-semibold">✏️ MODIFIÉ</div>
+                                  <div className="text-xs text-gray-600">
+                                    Original: <span className="font-semibold text-red-600">{dbOriginalAmount.toFixed(2)} MAD</span>
+                                  </div>
+                                  <div className="text-xs text-gray-600">
+                                    Nouveau: <span className="font-semibold text-green-600">{dbNewAmount.toFixed(2)} MAD</span>
+                                  </div>
+                                  {/* Show notes without the [EDITED] marker */}
+                                  {notesStr.replace(/\[EDITED\].*?\)/, '').replace(/^\s*\|\s*/, '').trim() && (
+                                    <div className="text-xs text-gray-500 mt-1">{notesStr.replace(/\[EDITED\].*?\)/, '').replace(/^\s*\|\s*/, '').trim()}</div>
+                                  )}
+                                </div>
+                              );
+                            }
+                            
+                            // Also check local state for edits made in current session
+                            const editedInfo = editedMovements.get(String(m.id));
+                            if (editedInfo) {
+                              return (
+                                <div className="space-y-1">
+                                  <div className="text-xs text-amber-600 font-semibold">✏️ MODIFIÉ</div>
+                                  <div className="text-xs text-gray-600">
+                                    Original: <span className="font-semibold text-red-600">{editedInfo.originalAmount.toFixed(2)} MAD</span>
+                                  </div>
+                                  <div className="text-xs text-gray-600">
+                                    Nouveau: <span className="font-semibold text-green-600">{editedInfo.newAmount.toFixed(2)} MAD</span>
+                                  </div>
+                                  {m.notes && (
+                                    <div className="text-xs text-gray-500 mt-1">{m.notes}</div>
+                                  )}
+                                </div>
+                              );
+                            }
+                            return m.notes || '-';
+                          })()}
+                        </TableCell>
+                        <TableCell className={`text-right font-semibold ${isSoftDeleted ? 'text-gray-400 line-through' : (isDeposit ? 'text-green-600' : 'text-red-600')}`}>
+                          {isSoftDeleted ? '0.00 MAD' : `${isDeposit ? '+' : '-'}${Number(m.amount || 0).toFixed(2)} MAD`}
                         </TableCell>
                         <TableCell className="text-center">
                           <div className="flex items-center justify-center gap-1">
@@ -5275,30 +5470,45 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
                               size="sm"
                               onClick={() => {
                                 setEditingMovement(m);
-                                setEditMovementAmount(String(m.amount || ''));
+                                // Always show original amount for soft-deleted, current amount otherwise
+                                if (isSoftDeleted && originalAmount !== null) {
+                                  setEditMovementAmount(String(originalAmount));
+                                // For soft-deleted, extract original notes (before the [SUPPRIMÉ] marker)
+                                const notesStr = String(m.notes || '');
+                                const suppriméIndex = notesStr.indexOf('[SUPPRIMÉ]');
+                                const originalNotes = suppriméIndex > 0 
+                                  ? notesStr.substring(0, suppriméIndex).replace(/\s*\|\s*$/, '').trim()
+                                  : notesStr;
+                                setEditMovementNotes(originalNotes);
+                                } else {
+                                  setEditMovementAmount(String(m.amount || ''));
+                                  setEditMovementNotes(m.notes || '');
+                                }
                                 setEditMovementReason(m.reason || '');
-                                setEditMovementNotes(m.notes || '');
                                 setEditMovementDate(m.payment_date || '');
                                 setEditMovementDialogOpen(true);
                               }}
-                              disabled={!canEditCoffreEntry}
-                              title={!canEditCoffreEntry ? "Vous n'avez pas la permission « Modifier une Entrée Coffre »" : "Modifier"}
+                              disabled={!canEditCoffreEntry || isSoftDeleted}
+                              title={isSoftDeleted ? "Mouvement supprimé - modification désactivée" : (!canEditCoffreEntry ? "Vous n'avez pas la permission « Modifier une Entrée Coffre »" : "Modifier")}
+                              className={isSoftDeleted ? 'opacity-40 cursor-not-allowed' : ''}
                             >
                               <Edit className="w-4 h-4" />
                             </Button>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => {
-                                setDeletingMovement(m);
-                                setDeleteMovementDialogOpen(true);
-                              }}
-                              disabled={!canDeleteCoffreEntry}
-                              title={!canDeleteCoffreEntry ? "Vous n'avez pas la permission « Supprimer une Entrée Coffre »" : "Supprimer"}
-                              className="text-red-600 hover:text-red-700 hover:bg-red-50"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </Button>
+                            {!isSoftDeleted && (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => {
+                                  setDeletingMovement(m);
+                                  setDeleteMovementDialogOpen(true);
+                                }}
+                                disabled={!canDeleteCoffreEntry}
+                                title={!canDeleteCoffreEntry ? "Vous n'avez pas la permission « Supprimer une Entrée Coffre »" : "Supprimer"}
+                                className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </Button>
+                            )}
                           </div>
                         </TableCell>
                       </TableRow>
@@ -5392,12 +5602,21 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
                   try {
                     setEditMovementSubmitting(true);
 
+                    // Store original amount for tracking
+                    const originalAmount = Number(editingMovement.amount || 0);
+                    
+                    // Build notes with edit tracking
+                    let finalNotes = editMovementNotes || '';
+                    const editNote = `[EDITED] Original: ${originalAmount.toFixed(2)} MAD → New: ${amount.toFixed(2)} MAD (${new Date().toLocaleString('fr-FR')})`;
+                    finalNotes = finalNotes ? `${finalNotes} | ${editNote}` : editNote;
+
                     const payload: any = {
                       id: editingMovement.id,
                       amount,
                       reason: editMovementReason || null,
-                      notes: editMovementNotes || null,
+                      notes: finalNotes,
                       payment_date: editMovementDate || null,
+                      original_amount: originalAmount,
                     };
 
                     const res = await fetch(
@@ -5418,7 +5637,7 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
                       return;
                     }
 
-                    toast.success('Mouvement modifié avec succès');
+                    toast.success('Mouvement modifié avec succès (historique conservé en base de données)');
 
                     setEditMovementDialogOpen(false);
                     setEditingMovement(null);
@@ -5454,7 +5673,7 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
             <p className="text-sm text-gray-600">
               Êtes-vous sûr de vouloir supprimer ce mouvement ?
             </p>
-            {deletingMovement && (
+              {deletingMovement && (
               <div className="bg-gray-50 p-3 rounded-lg space-y-2">
                 <div className="flex justify-between text-sm">
                   <span className="text-gray-500">Date:</span>
@@ -5473,15 +5692,19 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
                   <span className="font-medium">{deletingMovement.reason || '-'}</span>
                 </div>
                 <div className="flex justify-between text-sm">
-                  <span className="text-gray-500">Montant:</span>
+                  <span className="text-gray-500">Montant Original:</span>
                   <span className="font-semibold text-red-600">
                     {Number(deletingMovement.amount || 0).toFixed(2)} MAD
                   </span>
                 </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-gray-500">Nouveau Montant:</span>
+                  <span className="font-semibold text-gray-500">0.00 MAD</span>
+                </div>
               </div>
             )}
-            <p className="text-xs text-red-600">
-              Cette action est irréversible.
+            <p className="text-xs text-amber-600">
+              ⚠️ Cette action ne supprime pas le mouvement. Le montant sera mis à 0 et l'original sera conservé pour traçabilité.
             </p>
             <div className="flex justify-end gap-2 pt-2">
               <Button
@@ -5511,13 +5734,32 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
                   try {
                     setDeleteMovementSubmitting(true);
 
+                    // Store original amount for tracking
+                    const originalAmount = Number(deletingMovement.amount || 0);
+
+                    // Instead of deleting, update the movement with amount=0 and add deletion trace note
+                    const deletedNote = `[SUPPRIMÉ] Montant original: ${originalAmount.toFixed(2)} MAD - Supprimé le ${new Date().toLocaleString('fr-FR')}`;
+                    const existingNotes = deletingMovement.notes ? String(deletingMovement.notes).trim() : '';
+                    const combinedNotes = existingNotes 
+                      ? `${existingNotes} | ${deletedNote}` 
+                      : deletedNote;
+
+                    const payload = {
+                      id: deletingMovement.id,
+                      amount: 0,
+                      notes: combinedNotes,
+                      original_amount: originalAmount,
+                    };
+
                     const res = await fetch(
-                      `https://${projectId}.supabase.co/functions/v1/super-handler/coffer-movements?id=${deletingMovement.id}`,
+                      `https://${projectId}.supabase.co/functions/v1/super-handler/coffer-movements`,
                       {
-                        method: 'DELETE',
+                        method: 'PUT',
                         headers: {
                           Authorization: `Bearer ${session.access_token}`,
+                          'Content-Type': 'application/json',
                         },
+                        body: JSON.stringify(payload),
                       }
                     );
 
@@ -5527,7 +5769,17 @@ export function CheckSafeModule({ session }: CheckSafeModuleProps) {
                       return;
                     }
 
-                    toast.success('Mouvement supprimé avec succès');
+                    // Track the soft-deleted movement locally for UI display
+                    setSoftDeletedMovements((prev) => {
+                      const newMap = new Map(prev);
+                      newMap.set(String(deletingMovement.id), {
+                        originalAmount,
+                        deletedAt: new Date().toISOString(),
+                      });
+                      return newMap;
+                    });
+
+                    toast.success('Mouvement marqué comme supprimé (montant mis à 0)');
 
                     setDeleteMovementDialogOpen(false);
                     setDeletingMovement(null);

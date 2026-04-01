@@ -1250,6 +1250,11 @@ export function CashManagementPage({ session }: CashManagementPageProps) {
             clientName = 'Fournisseur Passage';
           }
 
+          // Extract custom reference from notes if available (format: "reference=XXX")
+          const notes = String(e.notes || '');
+          const refMatch = notes.match(/reference=([^|\s]+)/);
+          const customReference = refMatch ? refMatch[1] : null;
+
           allPayments.push({
             // Ensure unique ids so they don't de-dupe with generic `expense-*` entries.
             id: `supplier-passage-${e.id}`,
@@ -1260,7 +1265,8 @@ export function CashManagementPage({ session }: CashManagementPageProps) {
             source_type: 'facture',
             source_id: e.id,
             payment_method: 'cash',
-            reference: e.id,
+            // Use custom reference if available, otherwise fall back to expense ID
+            reference: customReference || e.id,
             client_name: clientName,
             client_email: '-',
             created_by: e.created_by || null,

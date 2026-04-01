@@ -1065,6 +1065,9 @@ export function SupplierDetailsPage({ supplier, session, onBack, onSupplierUpdat
       return { matchesText, matchesDate, d };
     };
 
+    // Check if this is a passager supplier
+    const isPassagerSupplier = supplier?.is_passage || String(supplier?.type || '').toLowerCase() === 'passage';
+
     // Admin supplier invoices (Fournisseur Admin flow)
     // These are not in `payments`, so we add them to operations for visibility.
     for (const inv of adminSupplierInvoices) {
@@ -1095,6 +1098,29 @@ export function SupplierDetailsPage({ supplier, session, onBack, onSupplierUpdat
       });
     }
 
+    // For passager suppliers, create a map of discounts to match with payments
+    let discountMapForPayments = new Map<string, any>();
+    if (isPassagerSupplier) {
+      for (const disc of supplierDiscounts || []) {
+        const rawDate = disc.created_at || disc.discount_date || disc.date || null;
+        const amt = Math.abs(Number(disc.amount || disc.discount_amount || 0) || 0);
+        if (!amt) continue;
+
+        const ref = disc.reference || disc.id || '-';
+        const notes = disc.notes || disc.reason || '';
+        
+        // Extract reference from discount reason (e.g., "Remise - Paiement Passage (123333)" -> "123333")
+        const refMatch = notes.match(/\(([^)]+)\)/);
+        const extractedRef = refMatch ? refMatch[1] : null;
+        
+        // Use extracted reference or the discount reference as key
+        const key = extractedRef || ref;
+        if (key && key !== '-') {
+          discountMapForPayments.set(key, { ...disc, __amount: amt, __rawDate: rawDate });
+        }
+      }
+    }
+
     for (const p of supplierPayments) {
       const rawDate = p.payment_date || p.created_at;
       const d = rawDate ? new Date(rawDate) : null;
@@ -1105,17 +1131,64 @@ export function SupplierDetailsPage({ supplier, session, onBack, onSupplierUpdat
       const { matchesDate: mDate, matchesText: mText } = matchesFilter(hay, rawDate);
       if (!mDate || !mText) continue;
 
+      const paymentAmount = Number(p.amount || 0) || 0;
+      const paymentRef = p.reference_number || p.reference || '-';
+      const actor = p.created_by_email || p.created_by || '-';
+      const notes = p.notes || '-';
+
+      // For passager suppliers, check if there's a matching discount for this payment
+      let matchingDiscount = null;
+      let finalAmount = paymentAmount;
+      let finalNotes = notes;
+      let hasDiscount = false;
+      let discountAmount = 0;
+
+      if (isPassagerSupplier) {
+        // First, try to match by extracted reference (e.g., "123333" in discount reason matches "123333" payment reference)
+        if (paymentRef && paymentRef !== '-') {
+          matchingDiscount = discountMapForPayments.get(paymentRef);
+        }
+        
+        // If no match by extracted reference, try to match by discount reference
+        if (!matchingDiscount && paymentRef && paymentRef !== '-') {
+          for (const [key, disc] of discountMapForPayments) {
+            if (disc.reference && disc.reference === paymentRef) {
+              matchingDiscount = disc;
+              break;
+            }
+          }
+        }
+        
+        // If still no match, do NOT match with any remaining discount.
+        // Only match discounts when there's an explicit reference match.
+        // This prevents automatic discount matching when user didn't include any discount.
+        
+        if (matchingDiscount) {
+          // Show discount in Remise column without affecting payment amount
+          // The discount is displayed separately in the Remise column
+          discountAmount = matchingDiscount.__amount;
+          hasDiscount = true;
+          // Remove matched discount from map
+          const keyToRemove = matchingDiscount.__extractedRef || matchingDiscount.reference || matchingDiscount.id;
+          if (keyToRemove) {
+            discountMapForPayments.delete(keyToRemove);
+          }
+        }
+      }
+
       rows.push({
         id: `payment-${p.id}`,
         __type: 'Paiement',
         __sort: d && !Number.isNaN(d.getTime()) ? d.getTime() : 0,
         __raw: p,
         dateRaw: rawDate,
-        amount: Number(p.amount || 0) || 0,
+        amount: finalAmount,
         payment_method: p.payment_method || p.method || p.type || '-',
-        reference: p.reference_number || p.reference || '-',
-        actor: p.created_by_email || p.created_by || '-',
-        notes: p.notes || '-',
+        reference: paymentRef,
+        actor,
+        notes: finalNotes,
+        hasDiscount,
+        __discountAmount: discountAmount,
       });
     }
 
@@ -1145,37 +1218,40 @@ export function SupplierDetailsPage({ supplier, session, onBack, onSupplierUpdat
       });
     }
 
-    // Remise (discounts) as its own operation rows
-    for (const disc of supplierDiscounts || []) {
-      const rawDate = disc.created_at || disc.discount_date || disc.date || null;
-      const amt = Math.abs(Number(disc.amount || disc.discount_amount || 0) || 0);
-      if (!amt) continue;
+    // For non-passager suppliers, add discounts as separate rows (original behavior)
+    // For passager suppliers, discounts are shown in the Remise column of payment rows
+    if (!isPassagerSupplier) {
+      for (const disc of supplierDiscounts || []) {
+        const rawDate = disc.created_at || disc.discount_date || disc.date || null;
+        const amt = Math.abs(Number(disc.amount || disc.discount_amount || 0) || 0);
+        if (!amt) continue;
 
-      const ref = disc.reference || disc.id || '-';
-      const actor = disc.created_by_email || disc.created_by || '-';
-      const notes = disc.notes || disc.reason || 'Remise fournisseur';
-      const hay = `${ref} ${notes} ${amt} ${rawDate || ''} ${actor}`;
+        const ref = disc.reference || disc.id || '-';
+        const actor = disc.created_by_email || disc.created_by || '-';
+        const notes = disc.notes || disc.reason || 'Remise fournisseur';
+        const hay = `${ref} ${notes} ${amt} ${rawDate || ''} ${actor}`;
 
-      const { matchesDate: mDate, matchesText: mText, d } = matchesFilter(hay, rawDate);
-      if (!mDate || !mText) continue;
+        const { matchesDate: mDate, matchesText: mText, d } = matchesFilter(hay, rawDate);
+        if (!mDate || !mText) continue;
 
-      rows.push({
-        id: `discount-${disc.id || ref}`,
-        __type: 'Remise',
-        __sort: d && !Number.isNaN(d.getTime()) ? d.getTime() : 0,
-        __raw: disc,
-        dateRaw: rawDate,
-        amount: -amt,
-        payment_method: 'REMISE',
-        reference: formatReference(ref),
-        actor,
-        notes,
-      });
+        rows.push({
+          id: `discount-${disc.id || ref}`,
+          __type: 'Remise',
+          __sort: d && !Number.isNaN(d.getTime()) ? d.getTime() : 0,
+          __raw: disc,
+          dateRaw: rawDate,
+          amount: -amt,
+          payment_method: 'REMISE',
+          reference: formatReference(ref),
+          actor,
+          notes,
+        });
+      }
     }
 
     rows.sort((x, y) => y.__sort - x.__sort);
     return rows;
-  }, [supplierPayments, supplierAdvances, adminSupplierInvoices, supplierDiscounts, startDate, endDate, paymentsSearch, advancesSearch]);
+  }, [supplierPayments, supplierAdvances, adminSupplierInvoices, supplierDiscounts, supplierPassages, startDate, endDate, paymentsSearch, advancesSearch, supplier?.is_passage, supplier?.type]);
 
   const totalCombinedOperations = useMemo(() => {
     return combinedOperations.reduce((sum: number, r: any) => sum + (Number(r.amount) || 0), 0);
@@ -3007,6 +3083,11 @@ export function SupplierDetailsPage({ supplier, session, onBack, onSupplierUpdat
 
                           // Remises are displayed as their own operations rows.
                           if (type === 'Remise') return Math.abs(Number(row?.amount || 0) || 0);
+
+                          // For Paiement rows with discounts (passager suppliers), show the discount amount in the Remise column
+                          if (type === 'Paiement' && row.__discountAmount) {
+                            return Number(row.__discountAmount || 0) || 0;
+                          }
 
                           // For other operation types, do not guess remise from notes/timestamps.
                           return 0;

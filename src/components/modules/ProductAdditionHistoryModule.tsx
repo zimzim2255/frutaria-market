@@ -21,6 +21,7 @@ interface ProductAddition {
   supplier_name?: string;
   category?: string;
   created_at: string;
+  operation_date?: string; // Custom operation date (optional, falls back to created_at)
   created_by?: string;
   created_by_email?: string;
   lot?: string;
@@ -111,6 +112,11 @@ export default function ProductAdditionHistoryModule({ session }: { session: any
     const n = Number(v);
     return Number.isFinite(n) ? n : 0;
   };
+  // Helper to get the display date: use operation_date if set, otherwise fall back to created_at
+  const getDisplayDate = (a: ProductAddition) => {
+    return a.operation_date || a.created_at;
+  };
+
   const sortDate = (v: any) => {
     const t = v ? new Date(String(v)).getTime() : NaN;
     return Number.isFinite(t) ? t : 0;
@@ -251,6 +257,7 @@ export default function ProductAdditionHistoryModule({ session }: { session: any
           supplier_name: row.supplier_name || (row.supplier_id ? (suppliersMap[row.supplier_id] || '') : ''),
           category: row.category || '',
           created_at: row.created_at || new Date().toISOString(),
+          operation_date: row.operation_date || null, // Custom operation date (optional)
           created_by: row.created_by,
           created_by_email: row.created_by_email,
           lot: row.lot,
@@ -617,9 +624,9 @@ export default function ProductAdditionHistoryModule({ session }: { session: any
           <CardContent>
             <div className="grid grid-cols-2 md:grid-cols-3 gap-6">
               <div>
-                <Label className="text-sm font-semibold text-gray-700">Date d'Ajout</Label>
+                <Label className="text-sm font-semibold text-gray-700">Date d'Opération</Label>
                 <p className="text-lg font-medium text-gray-900 mt-2">
-                  {new Date(selectedAddition.created_at).toLocaleDateString('fr-FR')}
+                  {new Date(getDisplayDate(selectedAddition)).toLocaleDateString('fr-FR')}
                 </p>
               </div>
               <div>
@@ -661,7 +668,7 @@ export default function ProductAdditionHistoryModule({ session }: { session: any
     { header: 'Fourchette\nMax', accessor: (a) => a.fourchette_max ?? '-', align: 'right', cellWidth: 14 },
     { header: "Prix d'Achat\n(MAD)", accessor: (a) => a.purchase_price.toFixed(2), align: 'right', cellWidth: 16 },
     { header: 'Fournisseur', accessor: (a) => a.supplier_name || '-', cellWidth: 24 },
-    { header: "Date\nd'Ajout", accessor: (a) => new Date(a.created_at).toLocaleDateString('fr-FR'), cellWidth: 14 },
+    { header: "Date\nd'Opération", accessor: (a) => new Date(getDisplayDate(a)).toLocaleDateString('fr-FR'), cellWidth: 14 },
     { header: 'Ajouté\npar', accessor: (a) => a.created_by_email || '-', cellWidth: 18 },
   ];
 
@@ -1053,7 +1060,7 @@ export default function ProductAdditionHistoryModule({ session }: { session: any
                       <td className="px-6 py-4 text-sm text-right text-gray-700">{addition.fourchette_max ?? '-'}</td>
                       <td className="px-6 py-4 text-sm text-right text-gray-600">{addition.purchase_price.toFixed(2)} MAD</td>
                       <td className="px-6 py-4 text-sm text-gray-600">{addition.supplier_name || '-'}</td>
-                      <td className="px-6 py-4 text-sm text-gray-600">{new Date(addition.created_at).toLocaleDateString('fr-FR')}</td>
+                      <td className="px-6 py-4 text-sm text-gray-600">{new Date(getDisplayDate(addition)).toLocaleDateString('fr-FR')}</td>
                       <td className="px-6 py-4 text-sm text-right">
                         <Button
                           size="sm"

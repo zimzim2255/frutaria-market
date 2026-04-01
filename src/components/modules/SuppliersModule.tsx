@@ -113,8 +113,11 @@ export function SuppliersModule({ session }: SuppliersModuleProps) {
   const [passageDate, setPassageDate] = useState('');
   const [passageMethod, setPassageMethod] = useState<'cash' | 'check' | 'bank_transfer'>('cash');
   const [passageReference, setPassageReference] = useState('');
+  const [passageRemiseAmount, setPassageRemiseAmount] = useState('');
   const [passageNotes, setPassageNotes] = useState('');
   const [creatingPassage, setCreatingPassage] = useState(false);
+  const [referenceExists, setReferenceExists] = useState(false);
+  const [checkingReference, setCheckingReference] = useState(false);
   const [passageAdminStoreId, setPassageAdminStoreId] = useState<string>('');
   const [checks, setChecks] = useState<any[]>([]);
   const [selectedCheck, setSelectedCheck] = useState<any>(null);
@@ -1108,6 +1111,7 @@ export function SuppliersModule({ session }: SuppliersModuleProps) {
     setPassageSupplierSearch('');
     setPassageAmount('');
     setPassageReference('');
+    setPassageRemiseAmount('');
     setPassageNotes('');
     setPassageMethod('cash');
     setPassageDate(getTodayDate());
@@ -1123,6 +1127,33 @@ export function SuppliersModule({ session }: SuppliersModuleProps) {
     setPassageAdminStoreId('');
 
     setPassagePaymentDialogOpen(true);
+  };
+
+  // Check if a reference already exists in supplier passages
+  const checkReferenceExists = async (reference: string): Promise<boolean> => {
+    if (!reference.trim()) return false;
+    
+    try {
+      const response = await fetch(
+        `https://${projectId}.supabase.co/functions/v1/super-handler/supplier-passages`,
+        {
+          headers: {
+            'Authorization': `Bearer ${session.access_token}`,
+          },
+        }
+      );
+
+      if (response.ok) {
+        const data = await response.json();
+        const passages = data.passages || [];
+        return passages.some((p: any) => 
+          String(p.reference || '').toLowerCase() === reference.toLowerCase()
+        );
+      }
+    } catch (error) {
+      console.error('Error checking reference:', error);
+    }
+    return false;
   };
 
   const handleCreatePassagePayment = async (e: React.FormEvent) => {
@@ -1143,6 +1174,18 @@ export function SuppliersModule({ session }: SuppliersModuleProps) {
       return;
     }
 
+    // Check if custom reference already exists
+    if (passageReference.trim()) {
+      setCheckingReference(true);
+      const exists = await checkReferenceExists(passageReference);
+      setCheckingReference(false);
+      
+      if (exists) {
+        toast.error(`La référence "${passageReference}" existe déjà. Veuillez en choisir une autre.`);
+        return;
+      }
+    }
+
     // If payment method is check, user must either select an existing check or create one here.
     if (passageMethod === 'check') {
       if (passageCheckChoice === 'none') {
@@ -1161,8 +1204,40 @@ export function SuppliersModule({ session }: SuppliersModuleProps) {
 
     // If payment method is bank transfer, proof attachment is optional.
 
+    const remiseAmount = Number(String(passageRemiseAmount || '').replace(',', '.')) || 0;
+
     setCreatingPassage(true);
     try {
+      // First, apply remise if it exists
+      if (remiseAmount > 0) {
+        const remiseResponse = await fetch(
+          `https://${projectId}.supabase.co/functions/v1/super-handler/discounts`,
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${session.access_token}`,
+            },
+            body: JSON.stringify({
+              entity_id: selectedPassageSupplier.id,
+              entity_name: selectedPassageSupplier.name,
+              entity_type: 'supplier',
+              discount_percentage: 0,
+              discount_amount: remiseAmount,
+              reason: `Remise - Paiement Passage${passageReference ? ` (${passageReference})` : ''}`,
+              status: 'active',
+            }),
+          }
+        );
+
+        if (!remiseResponse.ok) {
+          const errData = await remiseResponse.json().catch(() => ({}));
+          console.error('Failed to create discount for passage:', errData);
+          // Don't block the passage payment if discount fails, just warn
+          toast.warning('Erreur lors de l\'application de la remise, mais le paiement sera enregistré');
+        }
+      }
+
       const payload: any = {
         supplier_id: selectedPassageSupplier.id,
         amount,
@@ -1241,13 +1316,25 @@ export function SuppliersModule({ session }: SuppliersModuleProps) {
         return;
       }
 
-      toast.success('Paiement Passage enregistré');
+      // Build success message
+      let successMessage = 'Paiement Passage enregistré';
+      if (amount > 0 && remiseAmount > 0) {
+        successMessage = `Paiement de ${amount.toFixed(2)} MAD + Remise de ${remiseAmount.toFixed(2)} MAD enregistrés`;
+      } else if (amount > 0) {
+        successMessage = `Paiement de ${amount.toFixed(2)} MAD enregistré`;
+      } else if (remiseAmount > 0) {
+        successMessage = `Remise de ${remiseAmount.toFixed(2)} MAD enregistrée`;
+      }
+
+      toast.success(successMessage);
       setPassagePaymentDialogOpen(false);
       setSelectedPassageSupplier(null);
       setPassageSupplierSearch('');
       setSelectedCheck(null);
       setPassageCheckChoice('none');
+      setPassageRemiseAmount('');
       fetchSuppliers();
+      fetchDiscounts();
     } catch (error: any) {
       toast.error(`Erreur: ${error.message}`);
     } finally {
@@ -2822,7 +2909,28 @@ export function SuppliersModule({ session }: SuppliersModuleProps) {
                   </div>
                 )}
               </div>
-              {/* Référence removed from UI (kept internally for cheque auto-fill / backend audit) */}
+              <div className="space-y-2">
+                <Label>Référence</Label>
+                <Input
+                  value={passageReference}
+                  onChange={(e) => setPassageReference(e.target.value)}
+                  placeholder="Ex: REF-2024-001"
+                />
+                <p className="text-xs text-gray-500">Référence du paiement (optionnel)</p>
+              </div>
+            </div>
+
+            {/* Remise field */}
+            <div className="space-y-2">
+              <Label>Remise (MAD)</Label>
+              <Input
+                type="number"
+                step="0.01"
+                value={passageRemiseAmount}
+                onChange={(e) => setPassageRemiseAmount(e.target.value)}
+                placeholder="0.00"
+              />
+              <p className="text-xs text-gray-500">Remise supplémentaire à appliquer (optionnel)</p>
             </div>
 
             <div className="space-y-2">

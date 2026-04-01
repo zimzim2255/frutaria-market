@@ -22,6 +22,7 @@ interface ProductAddition {
   supplier_name?: string;
   category?: string;
   created_at: string;
+  operation_date?: string; // Custom operation date (optional, falls back to created_at)
   created_by?: string;
   created_by_email?: string;
   lot?: string;
@@ -175,6 +176,12 @@ export default function StockReferenceHistoryModule({ session }: { session: any 
     const n = Number(v);
     return Number.isFinite(n) ? n.toFixed(2) : '0.00';
   };
+
+  // Helper to get the display date: use operation_date if set, otherwise fall back to created_at
+  const getDisplayDate = (a: ProductAddition) => {
+    return a.operation_date || a.created_at;
+  };
+
   const sortDate = (v: any) => {
     const t = v ? new Date(String(v)).getTime() : NaN;
     return Number.isFinite(t) ? t : 0;
@@ -289,6 +296,11 @@ export default function StockReferenceHistoryModule({ session }: { session: any 
         console.warn('Could not fetch stores for stock reference history filter:', e);
       }
 
+      // Helper to get the display date: use operation_date if set, otherwise fall back to created_at
+      const getDisplayDate = (row: any) => {
+        return row.operation_date || row.created_at;
+      };
+
       // Transform history rows into additions history
       const additionsHistory: ProductAddition[] = historyRows.map((row: any) => {
         const caisseNum = Number(row.caisse ?? 0) || 0;
@@ -314,6 +326,7 @@ export default function StockReferenceHistoryModule({ session }: { session: any 
           supplier_name: row.supplier_name || (row.supplier_id ? (suppliersMap[row.supplier_id] || '') : ''),
           category: row.category || '',
           created_at: row.created_at || new Date().toISOString(),
+          operation_date: row.operation_date || null, // Custom operation date (optional)
           created_by: row.created_by,
           created_by_email: row.created_by_email,
           lot: row.lot,
@@ -1447,7 +1460,7 @@ export default function StockReferenceHistoryModule({ session }: { session: any 
                         {product.fourchette_max !== undefined && product.fourchette_max !== null ? String(product.fourchette_max) : '-'}
                       </td>
                       <td className="px-6 py-4 text-sm text-gray-600">
-                        {new Date(product.created_at).toLocaleDateString('fr-FR')}
+                        {new Date(getDisplayDate(product)).toLocaleDateString('fr-FR')}
                       </td>
                       <td className="px-6 py-4 text-sm text-right">
                         <div className="flex items-center justify-end gap-1">
@@ -2206,7 +2219,7 @@ export default function StockReferenceHistoryModule({ session }: { session: any 
                         </td>
                         <td className="px-6 py-4 text-sm text-gray-600">
                           {(() => {
-                            const dates = group.products.map(p => new Date(p.created_at)).filter(d => !isNaN(d.getTime()));
+                            const dates = group.products.map(p => new Date(getDisplayDate(p))).filter(d => !isNaN(d.getTime()));
                             if (dates.length === 0) return '-';
                             const mostRecent = new Date(Math.max(...dates.map(d => d.getTime())));
                             return mostRecent.toLocaleDateString('fr-FR');
