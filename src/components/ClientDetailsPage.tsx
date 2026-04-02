@@ -265,7 +265,7 @@ export function ClientDetailsPage({ client, session, onBack }: ClientDetailsPage
     if (!editingGlobalPayment?.id) return;
 
     const amount = Number(String(editGpAmount || '').replace(',', '.'));
-    if (!Number.isFinite(amount) || amount <= 0) {
+    if (!Number.isFinite(amount) || amount < 0) {
       toast.error('Montant invalide');
       return;
     }

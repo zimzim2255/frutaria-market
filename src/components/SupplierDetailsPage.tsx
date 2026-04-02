@@ -1681,7 +1681,7 @@ export function SupplierDetailsPage({ supplier, session, onBack, onSupplierUpdat
       const parsedAmount = Number(String(correctNewAmount || '').replace(',', '.'));
       const currentAmount = Number(selectedPaymentForCorrection.amount || 0);
       
-      if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
+      if (!Number.isFinite(parsedAmount) || parsedAmount < 0) {
         toast.error('Montant invalide');
         return;
       }
@@ -1777,7 +1777,7 @@ export function SupplierDetailsPage({ supplier, session, onBack, onSupplierUpdat
       const parsedAmount = Number(String(correctAdvanceNewAmount || '').replace(',', '.'));
       const currentAmount = Number(selectedAdvanceForCorrection.amount || 0);
       
-      if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
+      if (!Number.isFinite(parsedAmount) || parsedAmount < 0) {
         toast.error('Montant invalide');
         return;
       }
@@ -2101,7 +2101,7 @@ export function SupplierDetailsPage({ supplier, session, onBack, onSupplierUpdat
       (doc as any).autoTable({
         startY: afterFilterY + 4,
         theme: 'grid',
-        tableWidth: 280,
+        tableWidth: 250,
         margin: { left: 10 },
         head: [[
           'DATE',
@@ -2111,11 +2111,20 @@ export function SupplierDetailsPage({ supplier, session, onBack, onSupplierUpdat
           'MONTANT PAIEMENT',
           'METHODE',
           'COFFRE',
-          'EFFECTUE PAR',
           'REMISE',
           'NOTES',
         ]],
-        body,
+        body: rowsForExport.map((r: any) => [
+          r._dateStr,
+          r._type || '-',
+          (r._reference && r._reference !== '-') ? r._reference : (r._paymentReference && r._paymentReference !== '-') ? r._paymentReference : '-',
+          r._type === 'Achat' ? money(r._amount) : '-',
+          r._isPayment ? money(r._amount) : '-',
+          r._method,
+          r._coffer,
+          money(r._remise || 0),
+          r._notes,
+        ]),
         styles: {
           fontSize: 8.5,
           cellPadding: 2,
@@ -2137,78 +2146,10 @@ export function SupplierDetailsPage({ supplier, session, onBack, onSupplierUpdat
           4: { cellWidth: 24, halign: 'right' },
           5: { cellWidth: 18, halign: 'center' },
           6: { cellWidth: 25 },
-          7: { cellWidth: 28 },
-          8: { cellWidth: 28, halign: 'right' },
-          9: { cellWidth: 35 },
+          7: { cellWidth: 28, halign: 'right' },
+          8: { cellWidth: 35 },
         },
         });
-
-      // RÉCAPITULATIF (like ClientDetailsPage)
-      const afterTableY = (doc as any).lastAutoTable?.finalY || afterFilterY + 30;
-
-      const recapRows: Array<[string, string]> = [
-        ['Total Facturé', money(totalFacture)],
-        ['Total Payé', money(totalPaid)],
-        ['Total Remise', money(totalRemise)],
-      ];
-
-      // Ensure the entire recap block (title + table) stays on ONE page.
-      // If there isn't enough space, push it to the next page before rendering.
-      const pageHeight = (doc as any).internal?.pageSize?.getHeight
-        ? (doc as any).internal.pageSize.getHeight()
-        : (doc as any).internal?.pageSize?.height;
-
-      const recapTitleYCurrent = afterTableY + 8;
-      const recapTableYCurrent = afterTableY + 10;
-      const approxRecapHeightMm = 6 /* header */ + (recapRows.length * 8) + 6; // safe estimate
-      const needNewPage = Boolean(pageHeight && (recapTableYCurrent + approxRecapHeightMm) > (pageHeight - 10));
-
-      if (needNewPage) {
-        doc.addPage();
-      }
-
-      const recapTitleY = needNewPage ? 18 : recapTitleYCurrent;
-      const recapTableY = needNewPage ? 20 : recapTableYCurrent;
-
-      doc.setFontSize(10);
-      doc.setFont('helvetica', 'bold');
-      doc.text('RÉCAPITULATIF', 20, recapTitleY);
-
-      (doc as any).autoTable({
-        startY: recapTableY,
-        theme: 'grid',
-        tableWidth: 90,
-        margin: { left: 20 },
-        head: [['', '']],
-        body: recapRows,
-        styles: {
-          fontSize: 9,
-          cellPadding: 2,
-          lineColor: [107, 134, 201],
-          lineWidth: 0.2,
-        },
-        headStyles: {
-          fillColor: [255, 255, 255],
-          textColor: [0, 0, 0],
-        },
-        columnStyles: {
-          0: { cellWidth: 50 },
-          1: { cellWidth: 40, halign: 'right' },
-        },
-        didParseCell: (data: any) => {
-          // Highlight last row (total général)
-          if (data.section === 'body' && data.row.index === recapRows.length - 1) {
-            data.cell.styles.fillColor = [185, 201, 234];
-            data.cell.styles.fontStyle = 'bold';
-          }
-          if (data.section === 'body' && data.column.index === 0) {
-            data.cell.styles.fontStyle = 'bold';
-          }
-        },
-        // Avoid row splitting so "Total Général" always stays inside the recap table
-        // and never renders alone on the next page.
-        rowPageBreak: 'avoid',
-      });
 
       const safeName = String(supplier.name || 'Fournisseur').replace(/[^a-z0-9-_ ]/gi, '').trim().replace(/\s+/g, '_');
       doc.save(`Rapport_Fournisseur_${safeName}_${new Date().toISOString().split('T')[0]}.pdf`);

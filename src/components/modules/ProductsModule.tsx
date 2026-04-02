@@ -1631,9 +1631,10 @@ export function ProductsModule({ session }: ProductsModuleProps) {
       items.forEach((item: any) => {
         if (!itemMatchesProduct(item)) return;
 
-        // Quantity may be stored as `quantity` (sales/invoices) OR `caisse` (purchase/transfer module)
-        // IMPORTANT: CreatePurchaseModule uses `caisse` (string) and keeps `quantity` as 1.
-        const qty = Number(item.caisse ?? item.quantity ?? 0);
+        // Use `quantity` for Ventes Totales, NOT `caisse`.
+        // `caisse` represents stock being moved and should NOT affect Ventes Totales.
+        // `quantity` represents the actual quantity sold.
+        const qty = Number(item.quantity ?? 0);
         if (!qty) return;
 
         totalSales += qty;

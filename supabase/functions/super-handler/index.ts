@@ -6759,8 +6759,8 @@ if (!existingInv?.id) {
 
       if (body.amount !== undefined) {
         const amount = Number(body.amount);
-        if (!Number.isFinite(amount) || amount <= 0) {
-          return jsonResponse({ error: "amount must be > 0" }, 400);
+        if (!Number.isFinite(amount) || amount < 0) {
+          return jsonResponse({ error: "amount must be >= 0" }, 400);
         }
         updateData.amount = amount;
       }
@@ -6783,6 +6783,19 @@ if (!existingInv?.id) {
 
       if (body.notes !== undefined) {
         updateData.notes = body.notes ? String(body.notes) : null;
+      }
+
+      // Add audit note for amount changes
+      if (body.amount !== undefined && existing) {
+        const oldAmount = Number(existing.amount || 0);
+        const newAmount = Number(body.amount);
+        if (oldAmount !== newAmount) {
+          const existingNotes = String(existing.notes || '');
+          const auditNote = ` | Ancien: ${oldAmount.toFixed(2)} | Nouveau: ${newAmount.toFixed(2)}`;
+          updateData.notes = existingNotes.includes('Ancien:') 
+            ? existingNotes 
+            : `${existingNotes}${existingNotes ? ' | ' : ''}Modification montant${auditNote}`;
+        }
       }
 
       // Best-effort audit: these columns might not exist on older DBs; if so, ignore.
@@ -8684,13 +8697,13 @@ if (!existingInv?.id) {
       }
       
       // ===== Stock reconciliation on sale edit =====
-      // Only reconcile if stock was already applied for this sale (marker present).
-      // Otherwise, stock will be deducted later when payment becomes paid/partial.
+      // ALWAYS reconcile stock when editing a normal sale (BL).
+      // This calculates the delta between old and new caisse values and updates store_stocks.
+      // No marker dependency - stock updates happen independently on every edit.
       try {
-      const stockAppliedMarker = 'stock_deducted=1';
       const { data: saleRow, error: saleRowErr } = await supabase
       .from('sales')
-      .select('id, store_id, notes, sale_number')
+      .select('id, store_id, created_for_store_id, source_store_id, sale_number')
       .eq('id', saleId)
       .maybeSingle();
       if (saleRowErr) throw saleRowErr;
@@ -8701,10 +8714,15 @@ if (!existingInv?.id) {
       saleNumber.startsWith('PURCHASE-') ||
       saleNumber.startsWith('TRANSFER-ADMIN-');
       
-      const notes = String((saleRow as any)?.notes || '');
-      const storeId = (saleRow as any)?.store_id ? String((saleRow as any).store_id) : '';
+      // Resolve store_id from multiple sources: store_id, created_for_store_id, or source_store_id
+      const storeId = (saleRow as any)?.store_id
+        ? String((saleRow as any).store_id)
+        : ((saleRow as any)?.created_for_store_id
+          ? String((saleRow as any).created_for_store_id)
+          : ((saleRow as any)?.source_store_id ? String((saleRow as any).source_store_id) : ''));
       
-      if (!isInternalDoc && storeId && notes.includes(stockAppliedMarker)) {
+      // Reconcile stock for normal sales (not internal transfer/purchase docs)
+      if (!isInternalDoc && storeId) {
       const { data: newItemsRows, error: newItemsErr } = await supabase
       .from('sale_items')
       .select('product_id, caisse, quantity')
@@ -9876,8 +9894,8 @@ if (!existingInv?.id) {
 
       const newAmount = Number(body.new_amount);
       const oldAmountFromFrontend = Number(body.old_amount);
-      if (!Number.isFinite(newAmount) || newAmount <= 0) {
-        return jsonResponse({ error: "new_amount must be > 0" }, 400);
+      if (!Number.isFinite(newAmount) || newAmount < 0) {
+        return jsonResponse({ error: "new_amount must be >= 0" }, 400);
       }
 
       const reason = String(body.reason || "").trim() || "Correction paiement";

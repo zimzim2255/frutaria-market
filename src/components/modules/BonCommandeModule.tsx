@@ -686,29 +686,17 @@ export default function BonCommandeModule({ session, onBack, sale, adminSelected
       }
     }
 
-    // Handle caisse changes with stock synchronization
+    // Handle caisse changes - track original values for stock reconciliation on save
+    // NOTE: Stock is NOT updated here. It is updated only when the sale is saved/confirmed
+    // to avoid duplicate stock updates and incorrect stock deductions during editing.
     if (field === 'caisse') {
-      const item = orderData.items.find(i => i.id === id);
-      if (item && item.product_id) {
-        const newCaisse = typeof value === 'string'
+      // Track the new caisse value for this item (for stock reconciliation on save)
+      setOriginalCaisseValues(prev => ({
+        ...prev,
+        [id]: typeof value === 'string'
           ? parseFloat(String(value).replace(',', '.'))
-          : Number(value);
-        const oldCaisse = originalCaisseValues[id] ?? (parseFloat(item.caisse) || 0);
-        const caisseDelta = newCaisse - oldCaisse;
-        
-        // Update stock if caisse changed
-        if (caisseDelta !== 0) {
-          // If caisse decreased, add back to stock (positive delta)
-          // If caisse increased, subtract from stock (negative delta)
-          updateProductStock(item.product_id, -caisseDelta);
-          
-          // Update original caisse for this item
-          setOriginalCaisseValues(prev => ({
-            ...prev,
-            [id]: newCaisse,
-          }));
-        }
-      }
+          : Number(value),
+      }));
     }
 
     setOrderData({
@@ -767,16 +755,8 @@ export default function BonCommandeModule({ session, onBack, sale, adminSelected
   };
 
   const removeItem = (id: string): void => {
-    const itemToRemove = orderData.items.find(item => item.id === id);
-    
-    // Restore stock when removing an item
-    if (itemToRemove && itemToRemove.product_id) {
-      const caisseNum = parseFloat(itemToRemove.caisse) || 0;
-      if (caisseNum > 0) {
-        // Add back the caisse to stock (positive delta)
-        updateProductStock(itemToRemove.product_id, caisseNum);
-      }
-    }
+    // NOTE: Stock is NOT updated here. It is updated only when the sale is saved/confirmed
+    // to avoid duplicate stock updates and incorrect stock deductions during editing.
     
     setOrderData({
       ...orderData,
