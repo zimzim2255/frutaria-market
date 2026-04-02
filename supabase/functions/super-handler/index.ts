@@ -8502,7 +8502,7 @@ if (!existingInv?.id) {
       
       const { data: beforeSale, error: beforeErr } = await supabase
       .from("sales")
-      .select("id, store_id, client_id, client_name, total_amount, amount_paid, remaining_balance, payment_status")
+      .select("id, store_id, client_id, client_name, total_amount, amount_paid, remaining_balance, payment_status, items")
       .eq("id", saleId)
       .maybeSingle();
       if (beforeErr) throw beforeErr;
@@ -8640,6 +8640,8 @@ if (!existingInv?.id) {
       // Sync sale_items if items were provided
       if (Array.isArray(body?.items)) {
       try {
+      console.log('[sales PUT] syncing sale_items, received items count:', body.items.length);
+      
       // Load old items BEFORE overwrite so we can reconcile stock deltas.
       const { data: oldItemsRows, error: oldItemsErr } = await supabase
       .from('sale_items')
@@ -8649,6 +8651,7 @@ if (!existingInv?.id) {
       if (oldItemsErr) {
       console.error('[sales PUT] failed to load old sale_items for stock reconciliation:', oldItemsErr);
       }
+      console.log('[sales PUT] old sale_items count:', (oldItemsRows || []).length);
       
       const itemsToInsert = normalizeSaleItems(body.items).map((it: any) => ({
       sale_id: saleId,
@@ -8661,13 +8664,18 @@ if (!existingInv?.id) {
       subtotal: it?.subtotal,
       }));
       
+      console.log('[sales PUT] itemsToInsert mapped count:', itemsToInsert.length, 'first item:', itemsToInsert[0]);
+      
       await supabase.from('sale_items').delete().eq('sale_id', saleId);
       if (itemsToInsert.length > 0) {
       const { error: insErr } = await supabase.from('sale_items').insert(itemsToInsert);
       if (insErr) {
       console.error('[sales PUT] sale_items insert failed:', insErr);
+      } else {
+      console.log('[sales PUT] sale_items inserted successfully');
       }
       }
+      console.log('[sales PUT] after sync, oldItemsRows:', oldItemsRows);
 
       // Also update the items JSONB column for backward compatibility
       const itemsJsonbToSave = body.items.map((item: any) => ({
@@ -8700,26 +8708,22 @@ if (!existingInv?.id) {
       // ALWAYS reconcile stock when editing a normal sale (BL).
       // This calculates the delta between old and new caisse values and updates store_stocks.
       // No marker dependency - stock updates happen independently on every edit.
+      // IMPORTANT: Use ORIGINAL sale store_id (beforeSale), not the updated one,
+      // in case admin changed store_id in the request body.
       try {
-      const { data: saleRow, error: saleRowErr } = await supabase
-      .from('sales')
-      .select('id, store_id, created_for_store_id, source_store_id, sale_number')
-      .eq('id', saleId)
-      .maybeSingle();
-      if (saleRowErr) throw saleRowErr;
-      
-      const saleNumber = String((saleRow as any)?.sale_number || '');
+      const saleNumber = String((beforeSale as any)?.sale_number || '');
       const isInternalDoc =
       saleNumber.startsWith('TRANSFER-') ||
       saleNumber.startsWith('PURCHASE-') ||
       saleNumber.startsWith('TRANSFER-ADMIN-');
       
-      // Resolve store_id from multiple sources: store_id, created_for_store_id, or source_store_id
-      const storeId = (saleRow as any)?.store_id
-        ? String((saleRow as any).store_id)
-        : ((saleRow as any)?.created_for_store_id
-          ? String((saleRow as any).created_for_store_id)
-          : ((saleRow as any)?.source_store_id ? String((saleRow as any).source_store_id) : ''));
+      // Resolve store_id from ORIGINAL sale (beforeSale) to ensure stock reconciliation
+      // happens for the correct store, even if admin tried to change store_id.
+      const storeId = (beforeSale as any)?.store_id
+        ? String((beforeSale as any).store_id)
+        : '';
+      
+      console.log('[sales PUT] stock reconciliation starting', { saleId, storeId, isInternalDoc, saleNumber });
       
       // Reconcile stock for normal sales (not internal transfer/purchase docs)
       if (!isInternalDoc && storeId) {
@@ -8730,6 +8734,33 @@ if (!existingInv?.id) {
       .limit(5000);
       if (newItemsErr) throw newItemsErr;
       
+      console.log('[sales PUT] new sale_items from DB:', (newItemsRows || []).length);
+      
+      // FALLBACK: If sale_items is empty but we just inserted items, query again
+      // In case of DB replication delay
+      let finalNewItems = newItemsRows;
+      if ((!newItemsRows || newItemsRows.length === 0) && (oldItemsRows || []).length > 0) {
+        console.warn('[sales PUT] sale_items empty but oldItems exist, retrying query...');
+        const { data: retryRows, error: retryErr } = await supabase
+          .from('sale_items')
+          .select('product_id, caisse, quantity')
+          .eq('sale_id', saleId)
+          .limit(5000);
+        if (!retryErr) finalNewItems = retryRows || [];
+        console.log('[sales PUT] retry gave:', (finalNewItems || []).length, 'items');
+      }
+      
+      // FALLBACK 2: If sale_items still empty, try extracting from items JSONB column
+      if ((!finalNewItems || finalNewItems.length === 0) && Array.isArray(body?.items)) {
+        console.warn('[sales PUT] sale_items still empty, extracting from items JSONB:', body.items.length);
+        finalNewItems = (body.items || []).map((it: any) => ({
+          product_id: it?.product_id || it?.id,
+          caisse: it?.caisse,
+          quantity: it?.quantity,
+        })).filter((it: any) => it.product_id);
+        console.log('[sales PUT] extracted from JSONB:', finalNewItems.length, 'items');
+      }
+      
       const computeQty = (it: any) => {
       const c = toNum(it?.caisse);
       // For BL sales, stock decrement is driven by `caisse` ONLY.
@@ -8738,24 +8769,45 @@ if (!existingInv?.id) {
       };
       
       const oldByProduct = new Map<string, number>();
-      (oldItemsRows || []).forEach((it: any) => {
+      let finalOldItems = oldItemsRows || [];
+      
+      // FALLBACK: If oldItemsRows is empty, try extracting from beforeSale.items JSONB
+      // This is the OLD sale snapshot with original caisse values
+      if ((!finalOldItems || finalOldItems.length === 0) && Array.isArray((beforeSale as any)?.items)) {
+        console.warn('[sales PUT] oldItemsRows empty, extracting from beforeSale.items JSONB:', (beforeSale as any).items.length);
+        finalOldItems = ((beforeSale as any).items || []).map((it: any) => ({
+          product_id: it?.id || it?.product_id,
+          caisse: it?.caisse,
+          quantity: it?.quantity,
+        })).filter((it: any) => it.product_id);
+        console.log('[sales PUT] extracted old items from JSONB:', finalOldItems.length, 'items', finalOldItems);
+      }
+      
+      (finalOldItems || []).forEach((it: any) => {
       const pid = it?.product_id ? String(it.product_id) : '';
       if (!pid) return;
       oldByProduct.set(pid, (oldByProduct.get(pid) || 0) + computeQty(it));
       });
       
       const newByProduct = new Map<string, number>();
-      (newItemsRows || []).forEach((it: any) => {
+      (finalNewItems || []).forEach((it: any) => {
       const pid = it?.product_id ? String(it.product_id) : '';
       if (!pid) return;
       newByProduct.set(pid, (newByProduct.get(pid) || 0) + computeQty(it));
       });
       
+      console.log('[sales PUT] stock reconciliation maps:', { oldProducts: oldByProduct.size, newProducts: newByProduct.size });
+      
       const productIds = Array.from(new Set([...oldByProduct.keys(), ...newByProduct.keys()]));
+      console.log('[sales PUT] reconciling', productIds.length, 'products');
+      
       for (const pid of productIds) {
       const oldQty = round2(toNum(oldByProduct.get(pid) || 0));
       const newQty = round2(toNum(newByProduct.get(pid) || 0));
       const delta = round2(newQty - oldQty);
+      
+      console.log('[sales PUT] product', pid, ':', { oldQty, newQty, delta });
+      
       if (delta === 0) continue;
       
       const { data: ss, error: ssErr } = await supabase
@@ -8770,21 +8822,31 @@ if (!existingInv?.id) {
       const prev = toNum((ss as any)?.quantity ?? 0);
       const next = Math.max(0, round2(prev - delta));
       
+      console.log('[sales PUT] updating store_stocks for product', pid, ':', { prev, delta, next });
+      
       if ((ss as any)?.id) {
       const { error: uErr } = await supabase
       .from('store_stocks')
       .update({ quantity: next })
       .eq('id', (ss as any).id);
-      if (uErr) throw uErr;
+      if (uErr) {
+        console.error('[sales PUT] store_stocks update failed:', uErr);
+        throw uErr;
+      }
       } else {
       const { error: iErr } = await supabase
       .from('store_stocks')
       .insert([{ store_id: storeId, product_id: pid, quantity: next }]);
-      if (iErr) throw iErr;
+      if (iErr) {
+        console.error('[sales PUT] store_stocks insert failed:', iErr);
+        throw iErr;
+      }
       }
       
       console.log('[sales PUT] stock reconciled after edit', { saleId, storeId, productId: pid, oldQty, newQty, delta, prev, next });
       }
+      } else {
+      console.log('[sales PUT] skipping stock reconciliation:', { isInternalDoc, hasStoreId: !!storeId });
       }
       } catch (e) {
       console.error('[sales PUT] stock reconciliation failed:', e);
