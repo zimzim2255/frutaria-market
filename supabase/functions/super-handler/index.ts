@@ -6503,6 +6503,7 @@ if (!existingInv?.id) {
       const rows = data || [];
       const storeIds = Array.from(new Set(rows.map((r: any) => r?.paid_by_store_id).filter(Boolean).map((v: any) => String(v))));
       const userIds = Array.from(new Set(rows.map((r: any) => r?.created_by).filter(Boolean).map((v: any) => String(v))));
+      const clientIds = Array.from(new Set(rows.map((r: any) => r?.client_id).filter(Boolean).map((v: any) => String(v))));
 
       let storesMap = new Map<string, any>();
       if (storeIds.length > 0) {
@@ -6530,13 +6531,28 @@ if (!existingInv?.id) {
         }
       }
 
+      let clientsMap = new Map<string, any>();
+      if (clientIds.length > 0) {
+        const { data: clientsRows, error: cErr } = await supabase
+          .from("clients")
+          .select("id, name")
+          .in("id", clientIds);
+        if (cErr) {
+          console.warn("/client-global-payments GET could not fetch clients:", cErr.message);
+        } else {
+          (clientsRows || []).forEach((cl: any) => clientsMap.set(String(cl.id), cl));
+        }
+      }
+
       const enriched = rows.map((p: any) => {
         const storeId = p?.paid_by_store_id ? String(p.paid_by_store_id) : null;
         const createdById = p?.created_by ? String(p.created_by) : null;
+        const clId = p?.client_id ? String(p.client_id) : null;
         return {
           ...p,
           paid_by_store_name: storeId ? (storesMap.get(storeId)?.name || null) : null,
           created_by_email: p?.created_by_email || (createdById ? (usersMap.get(createdById)?.email || null) : null),
+          client_name: clId ? (clientsMap.get(clId)?.name || 'Client') : 'Client',
           // Rendering-only field to avoid ambiguity in the frontend
           // NOTE: keep it derived from row fields here; the canonical handler attaches computed remise_amount.
           remise_display_amount: Math.abs(Number(p?.remise_amount ?? p?.discount_amount ?? 0) || 0),
@@ -9494,6 +9510,15 @@ if (!existingInv?.id) {
         )
       );
 
+      const clientIds = Array.from(
+        new Set(
+          (rows || [])
+            .map((r: any) => r?.client_id)
+            .filter((id: any) => id)
+            .map((id: any) => String(id))
+        )
+      );
+
       const emailByUserId = new Map<string, string>();
       if (createdByIds.length > 0) {
         const { data: uRows, error: uErr } = await supabase
@@ -9527,6 +9552,22 @@ if (!existingInv?.id) {
         });
       }
 
+      const clientNameByClientId = new Map<string, string>();
+      if (clientIds.length > 0) {
+        const { data: cRows, error: cErr } = await supabase
+          .from("clients")
+          .select("id, name")
+          .in("id", clientIds);
+
+        if (cErr) {
+          console.warn("/client-global-payments GET could not fetch clients:", cErr.message);
+        }
+
+        (cRows || []).forEach((c: any) => {
+          if (c?.id && c?.name) clientNameByClientId.set(String(c.id), String(c.name));
+        });
+      }
+
       const enriched = (rows || []).map((p: any) => {
         const createdBy = p?.created_by ? String(p.created_by) : null;
         const created_by_email = p?.created_by_email || (createdBy ? (emailByUserId.get(createdBy) || null) : null);
@@ -9534,10 +9575,14 @@ if (!existingInv?.id) {
         const actorRole = createdBy ? (roleByUserId.get(createdBy) || null) : null;
         const is_admin_payment = Boolean(p?.is_admin_payment) || actorRole === 'admin';
 
+        const clId = p?.client_id ? String(p.client_id) : null;
+        const client_name = clId ? (clientNameByClientId.get(clId) || 'Client') : 'Client';
+
         return {
           ...p,
           created_by_email,
           is_admin_payment,
+          client_name,
         };
       });
 
