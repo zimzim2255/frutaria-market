@@ -1756,14 +1756,39 @@ async function handler(req: Request): Promise<Response> {
           return jsonResponse({ products: [], stores: [] });
         }
 
-        const { data, error: productsError } = await supabase
-          .from("products")
-          .select("*")
-          .in("id", productIds)
-          .order("created_at", { ascending: false });
+        // Batch product IDs to avoid URL length limits (Supabase REST has ~2-8KB limit)
+        // Chunk into groups of 100 IDs per query
+        const BATCH_SIZE = 100;
+        const productBatches = [];
+        for (let i = 0; i < productIds.length; i += BATCH_SIZE) {
+          productBatches.push(productIds.slice(i, i + BATCH_SIZE));
+        }
 
-        if (productsError) throw productsError;
-        products = data || [];
+        console.log(`[/products GET] Batching ${productIds.length} products into ${productBatches.length} queries (batch size: ${BATCH_SIZE})`);
+
+        let products_accumulated: any[] = [];
+        for (let batchIndex = 0; batchIndex < productBatches.length; batchIndex++) {
+          const batch = productBatches[batchIndex];
+          const { data, error: productsError } = await supabase
+            .from("products")
+            .select("*")
+            .in("id", batch);
+
+          if (productsError) {
+            console.error(`[/products GET] Error fetching batch ${batchIndex + 1}/${productBatches.length}:`, productsError);
+            throw productsError;
+          }
+          
+          products_accumulated.push(...(data || []));
+          console.log(`[/products GET] Batch ${batchIndex + 1}/${productBatches.length}: fetched ${(data || []).length} products`);
+        }
+
+        // Sort combined results by created_at descending
+        products = (products_accumulated || []).sort((a: any, b: any) => {
+          const timeA = new Date(a.created_at || 0).getTime();
+          const timeB = new Date(b.created_at || 0).getTime();
+          return timeB - timeA;
+        });
       }
 
       console.log(`[/products GET] Fetched ${products?.length || 0} products`);
@@ -9283,12 +9308,106 @@ if (!existingInv?.id) {
   if (path.startsWith("/sales/") && method === "DELETE") {
     try {
       const saleId = path.split("/")[2];
+      
+      // Step 1: Fetch the sale before deleting to get store_id and items
+      const { data: sale, error: saleErr } = await supabase
+        .from("sales")
+        .select("id, store_id, sale_number, items")
+        .eq("id", saleId)
+        .maybeSingle();
+      if (saleErr) throw saleErr;
+      if (!sale) return jsonResponse({ error: "Sale not found" }, 404);
+      
+      const saleNumber = String((sale as any)?.sale_number || '');
+      const isInternalDoc = 
+        saleNumber.startsWith('TRANSFER-') || 
+        saleNumber.startsWith('PURCHASE-') ||
+        saleNumber.startsWith('TRANSFER-ADMIN-');
+      
+      // Step 2: For normal sales (BL), reverse the stock deduction
+      if (!isInternalDoc && (sale as any)?.store_id) {
+        const storeId = String((sale as any).store_id);
+        
+        try {
+          // Load sale items to get caisse values
+          const { data: saleItems, error: itemsErr } = await supabase
+            .from('sale_items')
+            .select('product_id, caisse, quantity')
+            .eq('sale_id', saleId)
+            .limit(5000);
+          if (itemsErr) throw itemsErr;
+          
+          let finalItems = saleItems || [];
+          
+          // Fallback: If sale_items empty, extract from items JSONB
+          if ((!finalItems || finalItems.length === 0) && Array.isArray((sale as any)?.items)) {
+            console.log('[sales DELETE] sale_items empty, extracting from sale.items JSONB');
+            finalItems = ((sale as any).items || []).map((it: any) => ({
+              product_id: it?.id || it?.product_id,
+              caisse: it?.caisse,
+              quantity: it?.quantity,
+            })).filter((it: any) => it.product_id);
+          }
+          
+          console.log('[sales DELETE] reversing stock for', finalItems.length, 'items, store:', storeId);
+          
+          // Step 3: Reverse stock for each product (ADD back the caisse)
+          const reverseByProductId = new Map<string, number>();
+          for (const it of (finalItems || [])) {
+            const pid = it?.product_id ? String(it.product_id) : '';
+            if (!pid) continue;
+            
+            const rawCaisse = (it as any)?.caisse;
+            const caisse = typeof rawCaisse === 'string' ? Number(String(rawCaisse).replace(',', '.')) : Number(rawCaisse);
+            const qty = Number.isFinite(caisse) ? caisse : 0;
+            if (qty <= 0) continue;
+            
+            reverseByProductId.set(pid, (reverseByProductId.get(pid) || 0) + qty);
+          }
+          
+          // Step 4: Update store_stocks (ADD the caisse back)
+          for (const [productId, reverseQty] of reverseByProductId.entries()) {
+            const { data: ss, error: ssErr } = await supabase
+              .from('store_stocks')
+              .select('id, quantity')
+              .eq('store_id', storeId)
+              .eq('product_id', productId)
+              .maybeSingle();
+            
+            if (ssErr && (ssErr as any).code !== 'PGRST116') throw ssErr;
+            
+            const currentQty = toNum((ss as any)?.quantity ?? 0);
+            const newQty = round2(currentQty + reverseQty);
+            
+            if ((ss as any)?.id) {
+              const { error: uErr } = await supabase
+                .from('store_stocks')
+                .update({ quantity: newQty })
+                .eq('id', (ss as any).id);
+              if (uErr) throw uErr;
+            } else {
+              const { error: iErr } = await supabase
+                .from('store_stocks')
+                .insert([{ store_id: storeId, product_id: productId, quantity: newQty }]);
+              if (iErr) throw iErr;
+            }
+            
+            console.log('[sales DELETE] stock reversed:', { saleId, storeId, productId, reversed: reverseQty, newTotal: newQty });
+          }
+        } catch (stockErr: any) {
+          console.error('[sales DELETE] stock reversal failed:', stockErr);
+          // Continue with deletion even if stock reversal fails
+        }
+      }
+      
+      // Step 5: Delete the sale
       const { error } = await supabase
         .from("sales")
         .delete()
         .eq("id", saleId);
 
       if (error) throw error;
+      console.log('[sales DELETE] sale deleted:', saleId);
       return jsonResponse({ success: true });
     } catch (error: any) {
       console.error("Error deleting sale:", error);

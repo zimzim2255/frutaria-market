@@ -493,6 +493,9 @@ export function UsersModule({ session }: UsersModuleProps) {
   };
 
   const handleEdit = (user: any) => {
+    // Editing disabled for all user types
+    return;
+    
     setEditingUser(user);
 
     const roleKey: keyof typeof defaultPermissions =
@@ -1005,10 +1008,12 @@ export function UsersModule({ session }: UsersModuleProps) {
                             >
                               <Power className={`w-4 h-4 ${user.is_active ? 'text-green-600' : 'text-red-600'}`} />
                             </Button>
+                            {/* Modification button disabled for all users */}
                             <Button
                               size="sm"
                               variant="outline"
-                              onClick={() => handleEdit(user)}
+                              disabled
+                              className="opacity-50 cursor-not-allowed"
                             >
                               <Edit className="w-4 h-4" />
                             </Button>

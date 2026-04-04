@@ -54,6 +54,7 @@ export function ProductTemplatesModule({ session }: ProductTemplatesModuleProps)
   const [fournisseurSuggestions, setFournisseurSuggestions] = useState<string[]>([]);
   const [suppliers, setSuppliers] = useState<any[]>([]);
   const [viewingPhotoUrl, setViewingPhotoUrl] = useState<string | null>(null);
+  const [duplicateReference, setDuplicateReference] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handlePhotoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -115,6 +116,14 @@ export function ProductTemplatesModule({ session }: ProductTemplatesModuleProps)
     }
   };
 
+  const checkDuplicateReference = async (reference: string): Promise<boolean> => {
+    const exists = templates.some(t => 
+      t.reference_number?.toLowerCase() === reference.toLowerCase() ||
+      t.reference?.toLowerCase() === reference.toLowerCase()
+    );
+    return exists;
+  };
+
   const fetchTemplates = async () => {
     try {
       setLoading(true);
@@ -132,7 +141,7 @@ export function ProductTemplatesModule({ session }: ProductTemplatesModuleProps)
         setTemplates(data.templates || []);
         
         // Extract unique categories
-        const uniqueCategories = [...new Set((data.templates || []).map((t: any) => t.category))];
+        const uniqueCategories: string[] = [...new Set((data.templates || []).map((t: any) => t.category))];
         setCategories(uniqueCategories.sort());
       } else {
         toast.error('Erreur lors du chargement des modèles');
@@ -212,6 +221,13 @@ export function ProductTemplatesModule({ session }: ProductTemplatesModuleProps)
     const reference = String(formData.reference || '').trim();
     if (!reference) {
       toast.error('La référence est obligatoire');
+      return;
+    }
+
+    const isDuplicate = await checkDuplicateReference(reference);
+    if (isDuplicate && !editingTemplate) {
+      toast.error('Cette référence existe déjà. Veuillez utiliser une autre référence.');
+      setDuplicateReference(true);
       return;
     }
 
@@ -307,6 +323,7 @@ export function ProductTemplatesModule({ session }: ProductTemplatesModuleProps)
       fourchette_max: '',
     });
     setEditingTemplate(null);
+    setDuplicateReference(false);
   };
 
   const handleEdit = (template: any) => {
@@ -361,10 +378,14 @@ export function ProductTemplatesModule({ session }: ProductTemplatesModuleProps)
       {/* Header */}
       <div className="flex flex-row justify-between items-center mb-8 w-full gap-4">
         <h1 className="text-3xl font-bold text-gray-900 flex-1">Modèles de Produits</h1>
-        <Dialog open={dialogOpen} onOpenChange={(open: boolean) => {
-          setDialogOpen(open);
-          if (!open) resetForm();
-        }}>
+          <Dialog open={dialogOpen} onOpenChange={(open: boolean) => {
+            if (!open) {
+              resetForm();
+              setNameSuggestions([]);
+              setCategorySuggestions([]);
+            }
+            setDialogOpen(open);
+          }}>
           <DialogTrigger asChild>
             <Button 
               style={{ backgroundColor: '#16a34a' }} 
@@ -438,7 +459,7 @@ export function ProductTemplatesModule({ session }: ProductTemplatesModuleProps)
                       onChange={(e) => {
                         setFormData({ ...formData, category: e.target.value });
                         if (e.target.value.length > 0) {
-                          const uniqueCategories = [...new Set(templates.map(t => t.category).filter(Boolean))];
+                          const uniqueCategories: string[] = [...new Set(templates.map(t => t.category).filter(Boolean))];
                           const filtered = uniqueCategories.filter(cat =>
                             cat.toLowerCase().includes(e.target.value.toLowerCase())
                           );
@@ -528,7 +549,16 @@ export function ProductTemplatesModule({ session }: ProductTemplatesModuleProps)
                     <Input
                       id="reference"
                       value={formData.reference}
-                      onChange={(e) => setFormData({ ...formData, reference: e.target.value })}
+                      onChange={async (e) => {
+                        const refValue = e.target.value;
+                        setFormData({ ...formData, reference: refValue });
+                        if (refValue.trim()) {
+                          const isDuplicate = await checkDuplicateReference(refValue);
+                          setDuplicateReference(isDuplicate);
+                        } else {
+                          setDuplicateReference(false);
+                        }
+                      }}
                       placeholder="Ex: PROD-001, SKU-ABC123..."
                       className="flex-1"
                       required
@@ -538,11 +568,13 @@ export function ProductTemplatesModule({ session }: ProductTemplatesModuleProps)
                     {!editingTemplate && (
                       <button
                         type="button"
-                        onClick={() => {
+                        onClick={async () => {
                           const timestamp = Date.now().toString().slice(-6);
                           const randomNum = Math.floor(Math.random() * 1000);
                           const newRef = `P${timestamp}${randomNum}`;
                           setFormData({ ...formData, reference: newRef });
+                          const isDuplicate = await checkDuplicateReference(newRef);
+                          setDuplicateReference(isDuplicate);
                         }}
                         className="px-3 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-md font-semibold text-sm whitespace-nowrap transition"
                         title="Générer une référence"
@@ -551,6 +583,11 @@ export function ProductTemplatesModule({ session }: ProductTemplatesModuleProps)
                       </button>
                     )}
                   </div>
+                  {duplicateReference && (
+                    <p className="text-red-500 text-sm mt-1 flex items-center gap-1">
+                      ⚠️ Cette référence existe déjà dans la base de données
+                    </p>
+                  )}
                 </div>
 
                 {/* Fourchette Min and Max */}
@@ -595,7 +632,7 @@ export function ProductTemplatesModule({ session }: ProductTemplatesModuleProps)
                 </Button>
                 <Button
                   type="submit"
-                  disabled={loading}
+                  disabled={loading || duplicateReference}
                   className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-6 py-2 rounded-lg disabled:opacity-50"
                 >
                   {loading ? '⏳ Enregistrement...' : '✓ Enregistrer'}

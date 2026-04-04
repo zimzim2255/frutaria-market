@@ -151,6 +151,8 @@ export function ProductsModule({ session }: ProductsModuleProps) {
     includeNames: true,
     includeQuantities: false,
   });
+  const [productDuplicateReference, setProductDuplicateReference] = useState(false);
+  const [templateReferenceDuplicate, setTemplateReferenceDuplicate] = useState(false);
 
   // Preview next reference (does NOT consume/reserve)
   const previewNextStockReference = async () => {
@@ -674,6 +676,21 @@ export function ProductsModule({ session }: ProductsModuleProps) {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    // Check for duplicate reference in products
+    const refValue = String(formData.reference || '').trim();
+    if (refValue && !editingProduct) {
+      const productExists = products.some(p => 
+        p.reference?.toLowerCase() === refValue.toLowerCase()
+      );
+      if (productExists) {
+        toast.error('Cette référence existe déjà dans la base de produits. Veuillez utiliser une autre référence.');
+        setProductDuplicateReference(true);
+        setLoading(false);
+        return;
+      }
+    }
+
     setLoading(true);
 
     try {
@@ -1365,6 +1382,7 @@ export function ProductsModule({ session }: ProductsModuleProps) {
     setReferenceSuggestions([]);
     setTemplateSuggestions({});
     setActiveArticleId(null);
+    setProductDuplicateReference(false);
 
     setEditingProduct(null);
     setEditingProductRowId(null);
@@ -2942,6 +2960,7 @@ export function ProductsModule({ session }: ProductsModuleProps) {
             setNewTemplateData({ name: '', category: '', description: '', reference_number: '', entrepot: '', date_fin: '', fournisseur: '', fourchette_min: '', fourchette_max: '' });
             setTemplatePhotoFile(null);
             setTemplatePhotoPreview('');
+            setTemplateReferenceDuplicate(false);
           }
         }}>
           <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
@@ -2962,6 +2981,16 @@ export function ProductsModule({ session }: ProductsModuleProps) {
             if (!ref) {
             toast.error('La référence est obligatoire');
             return;
+            }
+            
+            // Check for duplicate reference
+            const templateExists = productTemplates.some(
+              t => t.reference?.toLowerCase() === ref.toLowerCase()
+            );
+            if (templateExists) {
+              setTemplateReferenceDuplicate(true);
+              toast.error(`La référence "${ref}" existe déjà dans les modèles. Veuillez utiliser une autre référence.`);
+              return;
             }
             
             if (newTemplateData.name.trim()) {
@@ -2998,7 +3027,7 @@ export function ProductsModule({ session }: ProductsModuleProps) {
                   onChange={(e) => {
                     setNewTemplateData({ ...newTemplateData, category: e.target.value });
                     if (e.target.value.length > 0) {
-                      const uniqueCategories = [...new Set(productTemplates.map(t => t.category).filter(Boolean))];
+                      const uniqueCategories: string[] = [...new Set(productTemplates.map(t => t.category).filter(Boolean))];
                       const filtered = uniqueCategories.filter(cat =>
                         cat.toLowerCase().includes(e.target.value.toLowerCase())
                       );
@@ -3086,26 +3115,50 @@ export function ProductsModule({ session }: ProductsModuleProps) {
               <Label className="font-semibold text-gray-900">Numéro de Référence *</Label>
               <div className="relative mt-1">
               <Input
-              value={newTemplateData.reference_number}
-              onChange={(e) => setNewTemplateData({ ...newTemplateData, reference_number: e.target.value })}
-              placeholder="Ex: REF-001, SKU-12345..."
-              className="bg-gray-50 border-gray-300 pr-10 text-sm"
-              required
+                value={newTemplateData.reference_number}
+                onChange={(e) => {
+                  const refValue = e.target.value.trim();
+                  setNewTemplateData({ ...newTemplateData, reference_number: e.target.value });
+                  
+                  // Real-time duplicate check
+                  if (refValue) {
+                    const exists = productTemplates.some(
+                      t => t.reference?.toLowerCase() === refValue.toLowerCase()
+                    );
+                    setTemplateReferenceDuplicate(exists);
+                  } else {
+                    setTemplateReferenceDuplicate(false);
+                  }
+                }}
+                placeholder="Ex: REF-001, SKU-12345..."
+                className={`bg-gray-50 border-gray-300 pr-10 text-sm ${templateReferenceDuplicate ? 'border-red-500 focus:border-red-500' : ''}`}
+                required
               />
               <button
-              type="button"
-              onClick={() => {
-              const timestamp = Date.now().toString().slice(-6);
-              const randomNum = Math.floor(Math.random() * 1000);
-              const newRef = `P${timestamp}${randomNum}`;
-              setNewTemplateData({ ...newTemplateData, reference_number: newRef });
-              }}
-              className="absolute right-2 top-1/2 transform -translate-y-1/2 text-indigo-500 hover:text-indigo-700 text-lg cursor-pointer"
-              title="Générer une référence automatique"
+                type="button"
+                onClick={() => {
+                  const timestamp = Date.now().toString().slice(-6);
+                  const randomNum = Math.floor(Math.random() * 1000);
+                  const newRef = `P${timestamp}${randomNum}`;
+                  setNewTemplateData({ ...newTemplateData, reference_number: newRef });
+                  
+                  // Also check for duplicate when auto-generating
+                  const exists = productTemplates.some(
+                    t => t.reference?.toLowerCase() === newRef.toLowerCase()
+                  );
+                  setTemplateReferenceDuplicate(exists);
+                }}
+                className="absolute right-2 top-1/2 transform -translate-y-1/2 text-indigo-500 hover:text-indigo-700 text-lg cursor-pointer"
+                title="Générer une référence automatique"
               >
-              🔄
+                🔄
               </button>
               </div>
+              {templateReferenceDuplicate && (
+                <p className="text-xs text-red-500 mt-1">
+                  ⚠️ Cette référence existe déjà dans la base de données
+                </p>
+              )}
               </div>
 
               {/* Date de Fin */}
@@ -3161,7 +3214,8 @@ export function ProductsModule({ session }: ProductsModuleProps) {
                 </Button>
                 <Button
                   type="submit"
-                  className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-6 py-2 rounded-lg flex items-center gap-2"
+                  disabled={loading || templateReferenceDuplicate}
+                  className={`bg-blue-600 hover:bg-blue-700 text-white font-semibold px-6 py-2 rounded-lg flex items-center gap-2 ${templateReferenceDuplicate ? 'opacity-50 cursor-not-allowed' : ''}`}
                 >
                   <span>✓</span>
                   <span>Enregistrer</span>
@@ -3278,25 +3332,38 @@ export function ProductsModule({ session }: ProductsModuleProps) {
                               placeholder="Ex: Tomate"
                             />
                           </div>
-                          <div>
+                            <div>
                             <Label>Référence</Label>
                             <div className="relative">
                               <Input
                                 value={referenceSearch}
                                 onChange={(e) => {
-                                  setReferenceSearch(e.target.value);
-                                  if (e.target.value.length > 0) {
+                                  const refVal = e.target.value;
+                                  setReferenceSearch(refVal);
+                                  if (refVal.length > 0) {
                                     const suggestions = products.filter(p =>
-                                      p.reference?.toLowerCase().startsWith(e.target.value.toLowerCase())
+                                      p.reference?.toLowerCase().startsWith(refVal.toLowerCase())
                                     );
                                     setReferenceSuggestions(suggestions);
+                                    
+                                    // Check for duplicate
+                                    const isDuplicate = products.some(p => 
+                                      p.reference?.toLowerCase() === refVal.toLowerCase()
+                                    );
+                                    setProductDuplicateReference(isDuplicate);
                                   } else {
                                     setReferenceSuggestions([]);
+                                    setProductDuplicateReference(false);
                                   }
-                                  setFormData({ ...formData, reference: e.target.value });
+                                  setFormData({ ...formData, reference: refVal });
                                 }}
                                 placeholder="PROD-20240115-47392"
                               />
+                              {productDuplicateReference && (
+                                <p className="text-red-500 text-sm mt-1 flex items-center gap-1">
+                                  ⚠️ Cette référence existe déjà dans la base de produits
+                                </p>
+                              )}
                               {referenceSearch && referenceSuggestions.length > 0 && (
                                 <div className="absolute top-full left-0 right-0 mt-2 bg-white border border-gray-300 rounded-lg shadow-lg z-10 max-h-56 overflow-y-auto">
                                   <div className="sticky top-0 bg-gray-50 px-4 py-3 border-b border-gray-200">
@@ -4013,6 +4080,7 @@ export function ProductsModule({ session }: ProductsModuleProps) {
               entrepot: '',
               fournisseur: '',
             });
+            setTemplateReferenceDuplicate(false);
           }
         }}
       >
@@ -4025,6 +4093,20 @@ export function ProductsModule({ session }: ProductsModuleProps) {
           </DialogHeader>
           <form onSubmit={async (e) => {
             e.preventDefault();
+            
+            // Check if reference_number already exists in product templates
+            const refValue = String(newTemplateData.reference_number || '').trim();
+            if (refValue) {
+              const templateExists = productTemplates.some(
+                t => t.reference?.toLowerCase() === refValue.toLowerCase()
+              );
+              if (templateExists) {
+                setTemplateReferenceDuplicate(true);
+                toast.error(`La référence "${refValue}" existe déjà dans les modèles. Veuillez utiliser une autre référence.`);
+                return;
+              }
+            }
+            
             if (newTemplateData.name.trim()) {
               await createProductTemplate(newTemplateData.name, newTemplateData.category);
             }
@@ -4045,6 +4127,33 @@ export function ProductsModule({ session }: ProductsModuleProps) {
                 onChange={(e) => setNewTemplateData({ ...newTemplateData, category: e.target.value })}
                 placeholder="Ex: Fruits, Légumes..."
               />
+            </div>
+            <div>
+              <Label>Référence</Label>
+              <Input
+                value={newTemplateData.reference_number}
+                onChange={(e) => {
+                  const refValue = e.target.value.trim();
+                  setNewTemplateData({ ...newTemplateData, reference_number: e.target.value });
+                  
+                  // Real-time duplicate check
+                  if (refValue) {
+                    const exists = productTemplates.some(
+                      t => t.reference?.toLowerCase() === refValue.toLowerCase()
+                    );
+                    setTemplateReferenceDuplicate(exists);
+                  } else {
+                    setTemplateReferenceDuplicate(false);
+                  }
+                }}
+                placeholder="Ex: REF001..."
+                className={templateReferenceDuplicate ? 'border-red-500 focus:border-red-500' : ''}
+              />
+              {templateReferenceDuplicate && (
+                <p className="text-xs text-red-500 mt-1">
+                  ⚠️ Cette référence existe déjà dans la base de données
+                </p>
+              )}
             </div>
             <div className="flex justify-end gap-2">
               <Button
@@ -4069,7 +4178,8 @@ export function ProductsModule({ session }: ProductsModuleProps) {
               </Button>
               <Button
                 type="submit"
-                className="bg-green-600 hover:bg-green-700 text-white font-semibold px-6 py-2 rounded-lg"
+                disabled={templateReferenceDuplicate}
+                className={`bg-green-600 hover:bg-green-700 text-white font-semibold px-6 py-2 rounded-lg ${templateReferenceDuplicate ? 'opacity-50 cursor-not-allowed' : ''}`}
               >
                 ✓ Créer
               </Button>
