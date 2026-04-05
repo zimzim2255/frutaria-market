@@ -11,6 +11,9 @@ interface LoginScreenProps {
   supabase: any;
 }
 
+// Application version - update this when releasing new versions
+const APP_VERSION = 'v0.1.0';
+
 export function LoginScreen({ supabase }: LoginScreenProps) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -132,10 +135,8 @@ export function LoginScreen({ supabase }: LoginScreenProps) {
               {loading ? 'Connexion...' : 'Se connecter'}
             </Button>
           </form>
-          <div className="mt-4 text-center text-sm text-gray-600">
-            <p>Compte démo:</p>
-            <p>Email: admin@hmad.com</p>
-            <p>Mot de passe: admin123</p>
+          <div className="mt-6 text-center text-xs text-gray-400">
+            <p>{APP_VERSION}</p>
           </div>
         </CardContent>
       </Card>

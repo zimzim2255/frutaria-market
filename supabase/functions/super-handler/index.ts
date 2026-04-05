@@ -1740,7 +1740,7 @@ async function handler(req: Request): Promise<Response> {
           return jsonResponse({ products: [], stores: [] });
         }
 
-        // Get product_ids that exist in this store
+        // Get product_ids that exist in this store via store_stocks table
         const { data: stockRows, error: stockErr } = await supabase
           .from("store_stocks")
           .select("product_id")
@@ -1748,8 +1748,27 @@ async function handler(req: Request): Promise<Response> {
 
         if (stockErr) throw stockErr;
 
-        const productIds = Array.from(
+        const stockProductIds = Array.from(
           new Set((stockRows || []).map((r: any) => r.product_id).filter(Boolean))
+        );
+
+        // Also get products that have store_id matching the filter (fallback for products without store_stocks entry)
+        const { data: directProducts, error: directErr } = await supabase
+          .from("products")
+          .select("id")
+          .eq("store_id", effectiveStoreId);
+
+        if (directErr) {
+          console.warn("[/products GET] Error fetching direct store products:", directErr.message);
+        }
+
+        const directProductIds = Array.from(
+          new Set((directProducts || []).map((p: any) => p.id).filter(Boolean))
+        );
+
+        // Combine both sets of product IDs
+        const productIds = Array.from(
+          new Set([...stockProductIds, ...directProductIds])
         );
 
         if (productIds.length === 0) {
@@ -1877,6 +1896,18 @@ async function handler(req: Request): Promise<Response> {
           store_stocks[stock.store_id] = stock.quantity;
           totalStoreStock += stock.quantity;
         });
+
+        // FALLBACK: If store_stocks is empty but product has quantity_available > 0
+        // and a store_id, use that as a fallback. This handles cases where store_stocks
+        // entries were not created properly during product creation.
+        const productQty = Number(product.quantity_available ?? 0);
+        const productStoreId = (product as any).store_id ||
+          (product?.created_by ? userToStoreId.get(String(product.created_by)) : null) ||
+          null;
+        if (productQty > 0 && productStoreId && Object.keys(store_stocks).length === 0) {
+          store_stocks[productStoreId] = productQty;
+          totalStoreStock = productQty;
+        }
 
         // Compute a reliable store_id for the product.
         // Priority:

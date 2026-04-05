@@ -1547,20 +1547,28 @@ export function ProductsModule({ session }: ProductsModuleProps) {
     // - Admin: see all magasins (no filter)
     // - Non-admin with assigned store_id: see only their magasin stock
     // - Non-admin without store_id: fallback to old behavior (no extra filter)
+    // IMPORTANT: Check both store_stocks AND product.store_id for reliability.
+    // Some products may have store_id set but missing store_stocks entry due to race conditions.
     const matchesStoreVisibility =
       effectiveUserRole === 'admin'
         ? true
         : effectiveUserStoreId
-          ? !!product?.store_stocks && Object.prototype.hasOwnProperty.call(product.store_stocks, String(effectiveUserStoreId))
+          ? (!!product?.store_stocks && Object.prototype.hasOwnProperty.call(product.store_stocks, String(effectiveUserStoreId))) ||
+            String(product?.store_id) === String(effectiveUserStoreId)
           : true;
 
     // Admin-only store filter (magasin)
+    // IMPORTANT: Must check BOTH store_id AND store_stocks because:
+    // 1. Products are grouped by reference, and store_id keeps the first product's value
+    // 2. But store_stocks is merged, so a product might have stock in the filtered store
+    //    even if store_id doesn't match
     const matchesStoreFilter =
       effectiveUserRole !== 'admin'
         ? true
         : (storeFilter === 'all'
             ? true
-            : (String(product?.store_id) === String(storeFilter)));
+            : (String(product?.store_id) === String(storeFilter) ||
+               (product?.store_stocks && Object.prototype.hasOwnProperty.call(product.store_stocks, String(storeFilter)))));
 
     // Creator filter - if created_by is null/undefined, show it for all users
     const matchesCreator =
@@ -1691,7 +1699,18 @@ export function ProductsModule({ session }: ProductsModuleProps) {
 
   const visibleProducts = (effectiveUserRole !== 'admin' && effectiveUserStoreId)
     ? filteredProducts.map((p: any) => {
-        const qty = p?.store_stocks ? (p.store_stocks[String(effectiveUserStoreId)] ?? 0) : (p.quantity_available ?? 0);
+        // Priority for quantity:
+        // 1. store_stocks[user's store] if it exists and has a value
+        // 2. product.quantity_available if store_stocks is empty or zero (fallback for reliability)
+        // 3. 0 as last resort
+        const storeStockQty = p?.store_stocks ? (p.store_stocks[String(effectiveUserStoreId)] ?? null) : null;
+        const productQty = p?.quantity_available ?? 0;
+        
+        // Use store_stocks if it has a valid entry, otherwise fall back to product.quantity_available
+        const qty = (storeStockQty !== null && storeStockQty !== undefined && storeStockQty > 0)
+          ? storeStockQty
+          : productQty;
+        
         return {
           ...p,
           // For magasin views, treat quantity_available as the store-specific quantity
@@ -1703,7 +1722,12 @@ export function ProductsModule({ session }: ProductsModuleProps) {
       ? filteredProducts.map((p: any) => {
           // When admin filters by magasin, the export/summary must use that magasin quantity,
           // NOT the global total across all magasins.
-          const qty = p?.store_stocks ? (p.store_stocks[String(storeFilter)] ?? 0) : 0;
+          // Priority: store_stocks > quantity_available
+          const storeStockQty = p?.store_stocks ? (p.store_stocks[String(storeFilter)] ?? null) : null;
+          const productQty = p?.quantity_available ?? 0;
+          const qty = (storeStockQty !== null && storeStockQty !== undefined && storeStockQty > 0)
+            ? storeStockQty
+            : productQty;
           return {
             ...p,
             quantity_available: qty,
@@ -3950,7 +3974,7 @@ export function ProductsModule({ session }: ProductsModuleProps) {
                           <TableCell className="text-gray-900">{product.name}</TableCell>
                           <TableCell className="border-r border-black">
                           <div className="flex items-center" style={{ minWidth: '420px', paddingLeft: '80px' }}>
-                          {stores.length > 0 && product.store_stocks && Object.keys(product.store_stocks).length > 0 ? (
+                          {stores.length > 0 ? (
                           <div
                           className="grid border-2 border-black bg-white overflow-hidden"
                           style={{
@@ -3958,16 +3982,21 @@ export function ProductsModule({ session }: ProductsModuleProps) {
                           }}
                           >
                           {stockStores.map((store, idx) => {
-                          const stock = product.store_stocks[store.id];
+                          // Get stock from store_stocks first, fallback to quantity_available if store_id matches
+                          const stockFromTable = product.store_stocks?.[store.id];
+                          const matchesStoreId = String(product.store_id) === String(store.id);
+                          const stock = stockFromTable !== undefined && stockFromTable !== null
+                            ? stockFromTable
+                            : (matchesStoreId ? product.quantity_available : undefined);
                           const isCurrentUserStore = store.id === currentUserStoreId;
-                          const colorClass = isCurrentUserStore
-                          ? 'bg-red-100 text-red-800'
-                          : 'bg-green-100 text-green-800';
+                          const colorClass = stock !== undefined && stock !== null
+                            ? (isCurrentUserStore ? 'bg-red-100 text-red-800' : 'bg-green-100 text-green-800')
+                            : 'bg-white text-gray-300';
                           
                           return (
                           <div
                           key={store.id}
-                          className={`px-2 py-1 text-xs font-semibold text-center flex items-center justify-center ${stock !== undefined ? colorClass : 'bg-white text-gray-300'}`}
+                          className={`px-2 py-1 text-xs font-semibold text-center flex items-center justify-center ${colorClass}`}
                           style={{
                           minHeight: '34px',
                           borderRight: idx === stockStores.length - 1 && effectiveUserRole !== 'admin'
@@ -3975,7 +4004,7 @@ export function ProductsModule({ session }: ProductsModuleProps) {
                           : '2px solid #000',
                           }}
                           >
-                          {stock !== undefined ? stock : ''}
+                          {stock !== undefined && stock !== null ? stock : ''}
                           </div>
                           );
                           })}

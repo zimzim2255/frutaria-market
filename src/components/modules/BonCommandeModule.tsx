@@ -120,9 +120,10 @@ export default function BonCommandeModule({ session, onBack, sale, adminSelected
   // Generate auto BL ID on component mount using a concurrency-safe server-side counter.
   // This avoids duplicates across devices/users and removes localStorage reliance.
   useEffect(() => {
-    // If editing, use the existing sale number
+    // If editing, use the existing sale number and keep it unchanged (don't auto-generate new one)
     if (sale && sale.sale_number) {
       setBlId(sale.sale_number);
+      setCustomBlId(sale.sale_number);
       return;
     }
 
