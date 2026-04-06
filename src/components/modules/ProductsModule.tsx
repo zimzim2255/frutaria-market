@@ -1537,11 +1537,15 @@ export function ProductsModule({ session }: ProductsModuleProps) {
 
   const filteredProducts = groupedProducts.filter(product => {
     // Search filter
+    const searchLower = searchTerm.trim().toLowerCase();
     const matchesSearch =
-      !searchTerm || // If no search term, match all
-      product.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      product.reference?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      product.category?.toLowerCase().includes(searchTerm.toLowerCase());
+      !searchLower || // If no search term, match all
+      product.name?.toLowerCase().includes(searchLower) ||
+      product.reference?.toLowerCase().includes(searchLower) ||
+      product.stock_reference?.toLowerCase().includes(searchLower) ||
+      product.sku?.toLowerCase().includes(searchLower) ||
+      product.lot?.toLowerCase().includes(searchLower) ||
+      product.category?.toLowerCase().includes(searchLower);
 
     // Store visibility:
     // - Admin: see all magasins (no filter)

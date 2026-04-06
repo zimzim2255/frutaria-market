@@ -8059,7 +8059,7 @@ if (!existingInv?.id) {
             subtotal: parseFloat(item.subtotal) || parseFloat(item.total_price) || 0,
           };
           
-          console.log(`Sale item to insert:`, JSON.stringify(saleItem, null, 2));
+          console.log(`[sales POST] Sale item prepared - raw.caisse=${item.caisse}, parsed.caisse=${saleItem.caisse}, product_id=${productIdStr}`, JSON.stringify(saleItem, null, 2));
           saleItemsToInsert.push(saleItem);
         }
 
@@ -8151,21 +8151,38 @@ if (!existingInv?.id) {
         }
 
         // Also save items to the items JSONB column for backward compatibility
-        const itemsToSave = body.items.map((item: any) => ({
-          // keep legacy JSONB id as the real product uuid when available
-          id: item.product_id || item.id,
-          name: item.name || item.description || 'Produit',
-          quantity: parseFloat(item.quantity) || 0,
-          unitPrice: parseFloat(item.unitPrice) || parseFloat(item.unit_price) || 0,
-          subtotal: parseFloat(item.subtotal) || parseFloat(item.total_price) || 0,
-          caisse: item.caisse || item.number_of_boxes || 0,
-          moyenne: item.moyenne || item.avg_net_weight_per_box || 0,
-          reference: item.reference || null,
-          category: item.category || null,
-          lot: item.lot || null,
-          fourchette_min: item.fourchette_min || null,
-          fourchette_max: item.fourchette_max || null,
-        }));
+        // CRITICAL: Only save items with valid UUID product_id to JSONB
+        // This prevents storing non-UUID IDs that cause failures during stock reconciliation
+        const itemsToSave = body.items
+          .filter((item: any) => {
+            // Only include items where product_id is a valid UUID
+            const productId = item.product_id || item.id;
+            const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(productId).trim());
+            if (!isUuid) {
+              console.warn('[sales POST] Skipping item from JSONB save - not a valid UUID:', {
+                productId,
+                itemId: item.id,
+                itemName: item.name,
+              });
+            }
+            return isUuid;
+          })
+          .map((item: any) => ({
+            // IMPORTANT: Use product_id as the id in JSONB (must be a valid UUID)
+            id: String(item.product_id || item.id).trim(),
+            product_id: String(item.product_id || item.id).trim(),
+            name: item.name || item.description || 'Produit',
+            quantity: parseFloat(item.quantity) || 0,
+            unitPrice: parseFloat(item.unitPrice) || parseFloat(item.unit_price) || 0,
+            subtotal: parseFloat(item.subtotal) || parseFloat(item.total_price) || 0,
+            caisse: item.caisse || item.number_of_boxes || 0,
+            moyenne: item.moyenne || item.avg_net_weight_per_box || 0,
+            reference: item.reference || null,
+            category: item.category || null,
+            lot: item.lot || null,
+            fourchette_min: item.fourchette_min || null,
+            fourchette_max: item.fourchette_max || null,
+          }));
 
         const { data: updatedSale, error: updateError } = await supabase
           .from("sales")
@@ -8240,6 +8257,8 @@ if (!existingInv?.id) {
 
               if (sItemsErr) throw sItemsErr;
 
+              console.log('[sales POST] Retrieved sale_items for stock deduction:', JSON.stringify(sItems, null, 2));
+
               // Aggregate per product_id
               // IMPORTANT BUSINESS RULE:
               // - For normal BL sales, stock decrement is driven by `caisse` ONLY.
@@ -8252,10 +8271,22 @@ if (!existingInv?.id) {
                 const rawCaisse = (it as any)?.caisse;
                 const caisse = typeof rawCaisse === 'string' ? Number(String(rawCaisse).replace(',', '.')) : Number(rawCaisse);
                 const dec = Number.isFinite(caisse) ? caisse : 0;
-                if (dec <= 0) continue;
+                
+                console.log(`[sales POST] Processing item - pid=${pid}, rawCaisse=${rawCaisse}, parsedCaisse=${caisse}, dec=${dec}`);
+                
+                if (dec <= 0) {
+                  console.log(`[sales POST] Skipping item (dec <= 0): ${pid}`);
+                  continue;
+                }
 
-                decByProductId.set(pid, (decByProductId.get(pid) || 0) + dec);
+                const prevValue = decByProductId.get(pid) || 0;
+                const newValue = prevValue + dec;
+                decByProductId.set(pid, newValue);
+                
+                console.log(`[sales POST] Aggregated for product ${pid}: ${prevValue} + ${dec} = ${newValue}`);
               }
+
+              console.log('[sales POST] Final aggregated stock deductions:', JSON.stringify(Object.fromEntries(decByProductId), null, 2));
 
               for (const [productId, dec] of decByProductId.entries()) {
                 const { data: row, error: rowErr } = await supabase
@@ -8671,6 +8702,10 @@ if (!existingInv?.id) {
       
       if (Array.isArray(body?.items)) {
         const normItems = normalizeSaleItems(body.items);
+        console.log('[sales PUT] === AFTER NORMALIZATION ===');
+        normItems.forEach((item: any, idx: number) => {
+          console.log(`[sales PUT] normItems[${idx}]:`, { product_id: item?.product_id, caisse: item?.caisse, quantity: item?.quantity, subtotal: item?.subtotal });
+        });
         body.items = normItems;
         
         // Compute total from items (subtotal before remise)
@@ -8723,23 +8758,43 @@ if (!existingInv?.id) {
       if (oldItemsErr) {
       console.error('[sales PUT] failed to load old sale_items for stock reconciliation:', oldItemsErr);
       }
-      console.log('[sales PUT] old sale_items count:', (oldItemsRows || []).length);
+      console.log('[sales PUT] === LOADING OLD ITEMS FROM sale_items TABLE ===');
+      console.log('[sales PUT] oldItemsRows count:', (oldItemsRows || []).length);
+      (oldItemsRows || []).forEach((row: any, idx: number) => {
+        console.log(`[sales PUT] oldItemsRow[${idx}]:`, { product_id: row?.product_id, caisse: row?.caisse, quantity: row?.quantity });
+      });
       
-      const itemsToInsert = normalizeSaleItems(body.items).map((it: any) => ({
-      sale_id: saleId,
-      product_id: it?.product_id || null,
-      name: it?.name || it?.product_name || null,
-      reference: it?.reference || null,
-      caisse: it?.caisse,
-      quantity: it?.quantity,
-      unit_price: it?.unit_price,
-      subtotal: it?.subtotal,
-      }));
+      const itemsToInsert = normalizeSaleItems(body.items).map((it: any) => {
+        const mapped = {
+          sale_id: saleId,
+          product_id: it?.product_id || null,
+          name: it?.name || it?.product_name || null,
+          reference: it?.reference || null,
+          caisse: it?.caisse,
+          quantity: it?.quantity,
+          unit_price: it?.unit_price,
+          subtotal: it?.subtotal,
+          total_price: it?.subtotal || 0,
+        };
+        console.log('[sales PUT] itemToInsert entry:', { product_id: mapped.product_id, caisse: mapped.caisse, quantity: mapped.quantity, subtotal: mapped.subtotal });
+        return mapped;
+      });
       
       console.log('[sales PUT] itemsToInsert mapped count:', itemsToInsert.length, 'first item:', itemsToInsert[0]);
       
-      await supabase.from('sale_items').delete().eq('sale_id', saleId);
+      console.log('[sales PUT] === DELETING OLD sale_items ===');
+      const { error: delErr } = await supabase.from('sale_items').delete().eq('sale_id', saleId);
+      if (delErr) {
+        console.error('[sales PUT] failed to delete old sale_items:', delErr);
+      } else {
+        console.log('[sales PUT] old sale_items deleted successfully');
+      }
+      
       if (itemsToInsert.length > 0) {
+        console.log('[sales PUT] === INSERTING NEW sale_items ===');
+        (itemsToInsert || []).forEach((item: any, idx: number) => {
+          console.log(`[sales PUT] newItem[${idx}]:`, { product_id: item?.product_id, caisse: item?.caisse, quantity: item?.quantity });
+        });
       const { error: insErr } = await supabase.from('sale_items').insert(itemsToInsert);
       if (insErr) {
       console.error('[sales PUT] sale_items insert failed:', insErr);
@@ -8750,20 +8805,37 @@ if (!existingInv?.id) {
       console.log('[sales PUT] after sync, oldItemsRows:', oldItemsRows);
 
       // Also update the items JSONB column for backward compatibility
-      const itemsJsonbToSave = body.items.map((item: any) => ({
-        id: item.product_id || item.id,
-        name: item.name || item.description || 'Produit',
-        quantity: parseFloat(item.quantity) || 0,
-        unitPrice: parseFloat(item.unitPrice) || parseFloat(item.unit_price) || 0,
-        subtotal: parseFloat(item.subtotal) || parseFloat(item.total_price) || 0,
-        caisse: item.caisse || item.number_of_boxes || 0,
-        moyenne: item.moyenne || item.avg_net_weight_per_box || 0,
-        reference: item.reference || null,
-        category: item.category || null,
-        lot: item.lot || null,
-        fourchette_min: item.fourchette_min || null,
-        fourchette_max: item.fourchette_max || null,
-      }));
+      // CRITICAL: Only save items with valid UUID product_id to JSONB
+      // This prevents storing non-UUID IDs that cause failures during stock reconciliation
+      const itemsJsonbToSave = body.items
+        .filter((item: any) => {
+          // Only include items where product_id is a valid UUID
+          const productId = item.product_id || item.id;
+          const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(productId).trim());
+          if (!isUuid) {
+            console.warn('[sales PUT] Skipping item from JSONB save - not a valid UUID:', {
+              productId,
+              itemId: item.id,
+              itemName: item.name,
+            });
+          }
+          return isUuid;
+        })
+        .map((item: any) => ({
+          id: String(item.product_id || item.id).trim(),
+          product_id: String(item.product_id || item.id).trim(),
+          name: item.name || item.description || 'Produit',
+          quantity: parseFloat(item.quantity) || 0,
+          unitPrice: parseFloat(item.unitPrice) || parseFloat(item.unit_price) || 0,
+          subtotal: parseFloat(item.subtotal) || parseFloat(item.total_price) || 0,
+          caisse: item.caisse || item.number_of_boxes || 0,
+          moyenne: item.moyenne || item.avg_net_weight_per_box || 0,
+          reference: item.reference || null,
+          category: item.category || null,
+          lot: item.lot || null,
+          fourchette_min: item.fourchette_min || null,
+          fourchette_max: item.fourchette_max || null,
+        }));
 
       const { error: itemsJsonbError } = await supabase
         .from('sales')
@@ -8783,6 +8855,7 @@ if (!existingInv?.id) {
       // IMPORTANT: Use ORIGINAL sale store_id (beforeSale), not the updated one,
       // in case admin changed store_id in the request body.
       try {
+      console.log('[sales PUT] ========== ENTERING STOCK RECONCILIATION BLOCK ==========');
       const saleNumber = String((beforeSale as any)?.sale_number || '');
       const isInternalDoc =
       saleNumber.startsWith('TRANSFER-') ||
@@ -8796,6 +8869,7 @@ if (!existingInv?.id) {
         : '';
       
       console.log('[sales PUT] stock reconciliation starting', { saleId, storeId, isInternalDoc, saleNumber });
+      console.log('[sales PUT] oldItemsRows loaded:', (oldItemsRows || []).length, 'items:', JSON.stringify(oldItemsRows, null, 2));
       
       // Reconcile stock for normal sales (not internal transfer/purchase docs)
       if (!isInternalDoc && storeId) {
@@ -8806,7 +8880,7 @@ if (!existingInv?.id) {
       .limit(5000);
       if (newItemsErr) throw newItemsErr;
       
-      console.log('[sales PUT] new sale_items from DB:', (newItemsRows || []).length);
+      console.log('[sales PUT] new sale_items from DB:', (newItemsRows || []).length, 'items:', JSON.stringify(newItemsRows, null, 2));
       
       // FALLBACK: If sale_items is empty but we just inserted items, query again
       // In case of DB replication delay
@@ -8825,16 +8899,21 @@ if (!existingInv?.id) {
       // FALLBACK 2: If sale_items still empty, try extracting from items JSONB column
       if ((!finalNewItems || finalNewItems.length === 0) && Array.isArray(body?.items)) {
         console.warn('[sales PUT] sale_items still empty, extracting from items JSONB:', body.items.length);
-        finalNewItems = (body.items || []).map((it: any) => ({
-          product_id: it?.product_id || it?.id,
-          caisse: it?.caisse,
-          quantity: it?.quantity,
-        })).filter((it: any) => it.product_id);
+        finalNewItems = (body.items || []).map((it: any) => {
+          console.log('[sales PUT] JSONB new item:', { product_id: it?.product_id || it?.id, caisse: it?.caisse });
+          return {
+            product_id: it?.product_id || it?.id,
+            caisse: it?.caisse,
+            quantity: it?.quantity,
+          };
+        }).filter((it: any) => it.product_id);
         console.log('[sales PUT] extracted from JSONB:', finalNewItems.length, 'items');
       }
       
       const computeQty = (it: any) => {
-      const c = toNum(it?.caisse);
+      const rawCaisse = it?.caisse;
+      const c = toNum(rawCaisse);
+      console.log('[sales PUT] computeQty: rawCaisse=', rawCaisse, 'toNum(rawCaisse)=', c, 'isFinite=', Number.isFinite(c));
       // For BL sales, stock decrement is driven by `caisse` ONLY.
       // quantity is KG and must NOT affect store stock.
       return Number.isFinite(c) ? c : 0;
@@ -8843,32 +8922,58 @@ if (!existingInv?.id) {
       const oldByProduct = new Map<string, number>();
       let finalOldItems = oldItemsRows || [];
       
+      console.log('[sales PUT] === DETERMINING OLD ITEMS SOURCE ===');
+      console.log('[sales PUT] oldItemsRows available?:', (oldItemsRows || []).length > 0);
+      
       // FALLBACK: If oldItemsRows is empty, try extracting from beforeSale.items JSONB
       // This is the OLD sale snapshot with original caisse values
       if ((!finalOldItems || finalOldItems.length === 0) && Array.isArray((beforeSale as any)?.items)) {
-        console.warn('[sales PUT] oldItemsRows empty, extracting from beforeSale.items JSONB:', (beforeSale as any).items.length);
-        finalOldItems = ((beforeSale as any).items || []).map((it: any) => ({
-          product_id: it?.id || it?.product_id,
-          caisse: it?.caisse,
-          quantity: it?.quantity,
-        })).filter((it: any) => it.product_id);
+        console.warn('[sales PUT] ❌ FALLBACK: oldItemsRows empty, using beforeSale.items JSONB instead');
+        console.warn('[sales PUT] beforeSale.items available:', (beforeSale as any).items.length, 'items');
+        finalOldItems = ((beforeSale as any).items || []).map((it: any) => {
+          console.log('[sales PUT] JSONB old item from beforeSale:', { product_id: it?.id || it?.product_id, caisse: it?.caisse });
+          return {
+            product_id: it?.id || it?.product_id,
+            caisse: it?.caisse,
+            quantity: it?.quantity,
+          };
+        }).filter((it: any) => it.product_id);
         console.log('[sales PUT] extracted old items from JSONB:', finalOldItems.length, 'items', finalOldItems);
+      } else if ((oldItemsRows || []).length > 0) {
+        console.log('[sales PUT] ✓ Using oldItemsRows from DB directly');
+      } else {
+        console.error('[sales PUT] ❌ NO OLD ITEMS FOUND - cannot calculate delta!');
       }
       
       (finalOldItems || []).forEach((it: any) => {
       const pid = it?.product_id ? String(it.product_id) : '';
       if (!pid) return;
-      oldByProduct.set(pid, (oldByProduct.get(pid) || 0) + computeQty(it));
+      const qty = computeQty(it);
+      console.log('[sales PUT] === OLD ITEM AGGREGATION === pid:', pid, 'caisse:', it?.caisse, 'computed_qty:', qty);
+      oldByProduct.set(pid, (oldByProduct.get(pid) || 0) + qty);
       });
       
       const newByProduct = new Map<string, number>();
       (finalNewItems || []).forEach((it: any) => {
       const pid = it?.product_id ? String(it.product_id) : '';
       if (!pid) return;
-      newByProduct.set(pid, (newByProduct.get(pid) || 0) + computeQty(it));
+      const qty = computeQty(it);
+      console.log('[sales PUT] === NEW ITEM AGGREGATION === pid:', pid, 'caisse:', it?.caisse, 'computed_qty:', qty);
+      newByProduct.set(pid, (newByProduct.get(pid) || 0) + qty);
       });
       
       console.log('[sales PUT] stock reconciliation maps:', { oldProducts: oldByProduct.size, newProducts: newByProduct.size });
+      console.log('[sales PUT] Final oldByProduct map:', JSON.stringify(Object.fromEntries(oldByProduct), null, 2));
+      console.log('[sales PUT] Final newByProduct map:', JSON.stringify(Object.fromEntries(newByProduct), null, 2));
+      
+      // Show totals per product
+      const allProductIds = Array.from(new Set([...oldByProduct.keys(), ...newByProduct.keys()]));
+      console.log('[sales PUT] Products found:', allProductIds.length);
+      allProductIds.forEach(pid => {
+        const oldTotal = oldByProduct.get(pid) || 0;
+        const newTotal = newByProduct.get(pid) || 0;
+        console.log(`[sales PUT] Product ${pid}: oldTotal=${oldTotal}, newTotal=${newTotal}`);
+      });
       
       const productIds = Array.from(new Set([...oldByProduct.keys(), ...newByProduct.keys()]));
       console.log('[sales PUT] reconciling', productIds.length, 'products');
@@ -8878,9 +8983,17 @@ if (!existingInv?.id) {
       const newQty = round2(toNum(newByProduct.get(pid) || 0));
       const delta = round2(newQty - oldQty);
       
-      console.log('[sales PUT] product', pid, ':', { oldQty, newQty, delta });
+      console.log('[sales PUT] === STOCK DELTA CALCULATION ===');
+      console.log('[sales PUT] product:', pid);
+      console.log('[sales PUT]   oldQty (from BEFORE edit):', oldQty);
+      console.log('[sales PUT]   newQty (after edit):', newQty);
+      console.log('[sales PUT]   delta (newQty - oldQty):', delta);
+      console.log('[sales PUT]   delta interpretation:', delta > 0 ? 'MORE sold (stock goes DOWN)' : delta < 0 ? 'LESS sold (stock goes UP)' : 'NO CHANGE');
       
-      if (delta === 0) continue;
+      if (delta === 0) {
+        console.log('[sales PUT] delta is zero, skipping stock update');
+        continue;
+      }
       
       const { data: ss, error: ssErr } = await supabase
       .from('store_stocks')
@@ -8894,7 +9007,11 @@ if (!existingInv?.id) {
       const prev = toNum((ss as any)?.quantity ?? 0);
       const next = Math.max(0, round2(prev - delta));
       
-      console.log('[sales PUT] updating store_stocks for product', pid, ':', { prev, delta, next });
+      console.log('[sales PUT] === STORE STOCKS UPDATE ===');
+      console.log('[sales PUT]   current stock (prev):', prev);
+      console.log('[sales PUT]   delta to apply:', delta);
+      console.log('[sales PUT]   new stock (next = prev - delta):', next);
+      console.log('[sales PUT]   calculation: ', prev, '-', delta, '=', next);
       
       if ((ss as any)?.id) {
       const { error: uErr } = await supabase
@@ -8902,20 +9019,23 @@ if (!existingInv?.id) {
       .update({ quantity: next })
       .eq('id', (ss as any).id);
       if (uErr) {
-        console.error('[sales PUT] store_stocks update failed:', uErr);
+        console.error('[sales PUT] store_stocks update FAILED:', uErr);
         throw uErr;
       }
+      console.log('[sales PUT] store_stocks updated successfully');
       } else {
       const { error: iErr } = await supabase
       .from('store_stocks')
       .insert([{ store_id: storeId, product_id: pid, quantity: next }]);
       if (iErr) {
-        console.error('[sales PUT] store_stocks insert failed:', iErr);
+        console.error('[sales PUT] store_stocks insert FAILED:', iErr);
         throw iErr;
       }
+      console.log('[sales PUT] store_stocks created (new entry)');
       }
       
-      console.log('[sales PUT] stock reconciled after edit', { saleId, storeId, productId: pid, oldQty, newQty, delta, prev, next });
+      console.log('[sales PUT] === RECONCILIATION COMPLETE FOR PRODUCT ===');
+      console.log('[sales PUT] Summary: product', pid, '| old:', oldQty, '| new:', newQty, '| delta:', delta, '| stock_before:', prev, '| stock_after:', next);
       }
       } else {
       console.log('[sales PUT] skipping stock reconciliation:', { isInternalDoc, hasStoreId: !!storeId });

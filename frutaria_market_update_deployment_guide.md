@@ -27,20 +27,14 @@ cd dist
 powershell -Command "Compress-Archive -Path * -DestinationPath ../frutaria-build.zip -Force"
 ```
 
-### Mac/Linux
-```bash
-cd dist
-zip -r ../frutaria-build.zip .
-```
 
----
 
 ## 📤 STEP 3: UPLOAD TO VPS
 
 Run on your LOCAL machine (NOT the server):
 
 ```bash
-scp frutaria-build.zip root@187.124.40.28:/tmp/
+scp frutaria-build.zip ubuntu@187.124.40.28:/tmp/
 ```
 
 ---
@@ -48,7 +42,7 @@ scp frutaria-build.zip root@187.124.40.28:/tmp/
 ## 🖥️ STEP 4: CONNECT TO SERVER
 
 ```bash
-ssh root@187.124.40.28
+ssh ubuntu@187.124.40.28
 ```
 
 ---
@@ -68,8 +62,8 @@ unzip frutaria-build.zip
 rm -rf /var/www/frutaria-market/*
 
 # Move new files
-mv index.html /var/www/frutaria-market/
-mv assets /var/www/frutaria-market/
+sudo rm -rf /var/www/frutaria-market/assets
+sudo mv /tmp/assets /var/www/frutaria-market/
 ```
 
 ---

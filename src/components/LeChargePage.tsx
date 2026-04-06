@@ -348,17 +348,53 @@ export function LeChargePage({ session }: LeChargePageProps) {
       }
     }
 
-    // Filter by date range
-    if (filterStartDate) {
-      const startDate = new Date(filterStartDate);
-      startDate.setHours(0, 0, 0, 0);
-      filtered = filtered.filter(e => new Date(e.created_at) >= startDate);
-    }
-
-    if (filterEndDate) {
-      const endDate = new Date(filterEndDate);
-      endDate.setHours(23, 59, 59, 999);
-      filtered = filtered.filter(e => new Date(e.created_at) <= endDate);
+    // Filter by date range - use payment_date if available, otherwise use created_at
+    if (filterStartDate || filterEndDate) {
+      filtered = filtered.filter(e => {
+        // Dynamically choose which date to use: payment_date if exists, otherwise created_at
+        const dateToFilter = e.payment_date ? e.payment_date : e.created_at;
+        
+        if (!dateToFilter) {
+          return false; // No date available, exclude
+        }
+        
+        const expenseDate = new Date(dateToFilter);
+        // Reset time for consistent comparison
+        expenseDate.setHours(0, 0, 0, 0);
+        
+        // If only start date is set (no end date), treat it as filtering for that specific day only
+        if (filterStartDate && !filterEndDate) {
+          const targetDate = new Date(filterStartDate);
+          targetDate.setHours(0, 0, 0, 0);
+          return expenseDate.getTime() === targetDate.getTime();
+        }
+        
+        // If only end date is set (no start date), treat it as filtering for that specific day only
+        if (filterEndDate && !filterStartDate) {
+          const targetDate = new Date(filterEndDate);
+          targetDate.setHours(0, 0, 0, 0);
+          return expenseDate.getTime() === targetDate.getTime();
+        }
+        
+        // If both dates are set, use range filtering
+        if (filterStartDate) {
+          const startDate = new Date(filterStartDate);
+          startDate.setHours(0, 0, 0, 0);
+          if (expenseDate < startDate) {
+            return false;
+          }
+        }
+        
+        if (filterEndDate) {
+          const endDate = new Date(filterEndDate);
+          endDate.setHours(0, 0, 0, 0);
+          if (expenseDate > endDate) {
+            return false;
+          }
+        }
+        
+        return true;
+      });
     }
 
     // IMPORTANT: Le Charge page must show ONLY manual expenses created via "Enregistrer une Dépense".
@@ -411,8 +447,13 @@ export function LeChargePage({ session }: LeChargePageProps) {
     list.sort((a, b) => {
       switch (sortConfig.key) {
         case 'date': {
-          const aT = new Date(a?.created_at || 0).getTime() || 0;
-          const bT = new Date(b?.created_at || 0).getTime() || 0;
+          // Sort by payment_date (custom expense date) if available, fallback to created_at
+          const aT = a?.payment_date 
+            ? new Date(a.payment_date).getTime() 
+            : new Date(a?.created_at || 0).getTime() || 0;
+          const bT = b?.payment_date 
+            ? new Date(b.payment_date).getTime() 
+            : new Date(b?.created_at || 0).getTime() || 0;
           return (aT - bT) * dir;
         }
         case 'store': {

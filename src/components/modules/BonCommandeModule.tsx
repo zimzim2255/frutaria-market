@@ -499,8 +499,23 @@ export default function BonCommandeModule({ session, onBack, sale, adminSelected
         
         const mappedItems = itemsArray.map((item: any, idx: number) => {
           console.log(`Mapping item ${idx}:`, JSON.stringify(item, null, 2));
+          
+          // IMPORTANT: Generate a unique client-side ID for each item
+          // The backend may have stored item.id as the product UUID (in old buggy code),
+          // so we can't rely on item.id being a proper client-side temp ID.
+          // Generate a new timestamp-based ID to distinguish from product_id.
+          const clientSideId = `${Date.now()}-${idx}-${Math.random().toString(36).substr(2, 9)}`;
+          
+          // Extract the real product_id (may be in item.id or item.product_id after backend storage)
+          const realProductId = item.product_id || (
+            // Fallback: if item.id looks like a UUID, treat it as the product_id
+            /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(item.id || '').trim())
+              ? item.id
+              : undefined
+          );
+          
           const mapped = {
-            id: item.id || `item-${idx}`,
+            id: clientSideId,
             description: item.name || item.description || '',
             caisse: String(item.caisse || ''),
             quantity: Number(item.quantity) || 0,
@@ -512,9 +527,9 @@ export default function BonCommandeModule({ session, onBack, sale, adminSelected
             lot: item.lot || undefined,
             fourchette_min: item.fourchette_min || undefined,
             fourchette_max: item.fourchette_max || undefined,
-            product_id: item.product_id || undefined,
+            product_id: realProductId,
           };
-          console.log(`Mapped item ${idx}:`, mapped);
+          console.log(`Mapped item ${idx} with new clientSideId:`, mapped);
           return mapped;
         });
         
@@ -594,6 +609,18 @@ export default function BonCommandeModule({ session, onBack, sale, adminSelected
   const getTemplateForProduct = (p: any) => {
     const refKey = normalizeRefKey(p?.reference ?? p?.stock_reference ?? '');
     return (refKey ? templateByReference.get(refKey) : null) || null;
+  };
+
+  // Helper function to calculate available stock for a product
+  const getProductStock = (product: any): number => {
+    // Prefer store-specific stock (store_stocks) / totals. quantity_available can be stale.
+    const stock =
+      Number(product?.total_store_stock ?? 0) > 0
+        ? Number(product.total_store_stock)
+        : product?.store_stocks && typeof product.store_stocks === 'object'
+          ? Object.values(product.store_stocks).reduce((sum: number, v: any) => sum + (Number(v) || 0), 0)
+          : (Number(product?.quantity_available) || 0);
+    return stock;
   };
 
   // Calculate cumulative quantity (quantite) for a product across all order lines
@@ -1027,11 +1054,11 @@ export default function BonCommandeModule({ session, onBack, sale, adminSelected
           try {
             // Transform items to match backend expectations
             const transformedItems = orderData.items.map(item => ({
-              // Keep `id` as the client-side line id, but ALWAYS include a real product UUID.
-              // If product_id is missing, use id as fallback
+              // Keep `id` as the client-side line id (temporary, for UI tracking)
+              // product_id MUST be a real product UUID (must be set via product selection dropdown)
               id: item.id,
-              product_id: item.product_id || item.id,
-              productId: item.product_id || item.id,
+              product_id: item.product_id,
+              productId: item.product_id,
               name: item.description,
               quantity: item.quantity,
               caisse: item.caisse,
@@ -1103,18 +1130,23 @@ export default function BonCommandeModule({ session, onBack, sale, adminSelected
             console.log('Sale payload:', JSON.stringify(salePayload, null, 2));
             console.log('=== END FRONTEND SALE CREATION ===');
 
-            // Frontend validation: block if any line doesn't have a selected product UUID.
-            // Accept either product_id or id as the product identifier
-            const missingProduct = (transformedItems || [])
+            // Frontend validation: block if any line doesn't have a REAL selected product UUID
+            // The product_id must be different from the item.id (item.id is client-side temp ID)
+            const invalidProducts = (transformedItems || [])
               .map((it: any, idx: number) => ({ 
                 idx, 
-                product_id: String(it?.product_id || it?.id || '').trim(), 
+                itemId: it?.id,
+                product_id: String(it?.product_id || '').trim(), 
                 name: it?.name 
               }))
-              .filter((x: any) => !x.product_id);
-            if (missingProduct.length > 0) {
-              console.error('[BonCommandeModule] Blocking sale: missing product_id on items', missingProduct);
-              toast.error('Veuillez sélectionner un produit depuis la liste (produit_id manquant).');
+              .filter((x: any) => {
+                // Block if: product_id is empty OR product_id equals item.id (not a real product)
+                return !x.product_id || (x.product_id === x.itemId);
+              });
+            if (invalidProducts.length > 0) {
+              console.error('[BonCommandeModule] Blocking sale: invalid product_id - items must be selected from dropdown', invalidProducts);
+              const invalidItemNames = invalidProducts.map((x: any) => `"${x.name}"`).join(', ');
+              toast.error(`❌ Produit(s) non sélectionné(s) depuis la liste: ${invalidItemNames}. Veuillez cliquer sur chaque produit dans le dropdown.`);
               return;
             }
 
@@ -1326,10 +1358,14 @@ export default function BonCommandeModule({ session, onBack, sale, adminSelected
                           if (searchValue.trim() === '') {
                             setShowProductSuggestions({ ...showProductSuggestions, [item.id]: false });
                           } else {
-                            const filtered = products.filter(product =>
-                              product.name?.toLowerCase().includes(searchValue.toLowerCase()) ||
-                              product.reference?.toLowerCase().includes(searchValue.toLowerCase())
-                            );
+                            const filtered = products.filter(product => {
+                              // Match by name or reference
+                              const matchesSearch = product.name?.toLowerCase().includes(searchValue.toLowerCase()) ||
+                                product.reference?.toLowerCase().includes(searchValue.toLowerCase());
+                              // Exclude products with 0 stock
+                              const hasStock = getProductStock(product) > 0;
+                              return matchesSearch && hasStock;
+                            });
                             setFilteredProducts(filtered);
                             setShowProductSuggestions({ ...showProductSuggestions, [item.id]: filtered.length > 0 });
                           }
@@ -1363,13 +1399,8 @@ export default function BonCommandeModule({ session, onBack, sale, adminSelected
                           {/* Scrollable List */}
                           <div className="overflow-y-auto flex-1">
                             {filteredProducts.map((product) => {
-                              // Prefer store-specific stock (store_stocks) / totals. quantity_available can be stale.
-                              const stock =
-                                Number(product?.total_store_stock ?? 0) > 0
-                                  ? Number(product.total_store_stock)
-                                  : product?.store_stocks && typeof product.store_stocks === 'object'
-                                    ? Object.values(product.store_stocks).reduce((sum: number, v: any) => sum + (Number(v) || 0), 0)
-                                    : (Number(product?.quantity_available) || 0);
+                              // Use helper function to get stock
+                              const stock = getProductStock(product);
 
                               const tpl = getTemplateForProduct(product);
                               const tplRef = tpl?.reference_number ?? tpl?.reference ?? null;
@@ -2190,11 +2221,11 @@ export default function BonCommandeModule({ session, onBack, sale, adminSelected
                     try {
                       // Transform items to match backend expectations
                       const transformedItems = orderData.items.map(item => ({
-                        // Keep `id` as the client-side line id. product_id must be a real product UUID.
-                        // If product_id is missing, use id as fallback
+                        // Keep `id` as the client-side line id (temporary, for UI tracking)
+                        // product_id MUST be a real product UUID (must be set via product selection dropdown)
                         id: item.id,
-                        product_id: item.product_id || item.id,
-                        productId: item.product_id || item.id,
+                        product_id: item.product_id,
+                        productId: item.product_id,
                         name: item.description,
                         quantity: item.quantity,
                         unitPrice: item.unitPrice,
@@ -2212,18 +2243,23 @@ export default function BonCommandeModule({ session, onBack, sale, adminSelected
                       console.log('Transformed items:', JSON.stringify(transformedItems, null, 2));
                       console.log('Items count:', transformedItems.length);
 
-                      // Frontend validation: block if any line doesn't have a selected product UUID.
-                      // Accept either product_id or id as the product identifier
-                      const missingProduct = (transformedItems || [])
+                      // Frontend validation: block if any line doesn't have a REAL selected product UUID
+                      // The product_id must be different from the item.id (item.id is client-side temp ID)
+                      const invalidProducts = (transformedItems || [])
                         .map((it: any, idx: number) => ({ 
                           idx, 
-                          product_id: String(it?.product_id || it?.id || '').trim(), 
+                          itemId: it?.id,
+                          product_id: String(it?.product_id || '').trim(), 
                           name: it?.name 
                         }))
-                        .filter((x: any) => !x.product_id);
-                      if (missingProduct.length > 0) {
-                        console.error('[BonCommandeModule] Blocking sale confirmation: missing product_id on items', missingProduct);
-                        toast.error('Veuillez sélectionner un produit depuis la liste (produit_id manquant).');
+                        .filter((x: any) => {
+                          // Block if: product_id is empty OR product_id equals item.id (not a real product)
+                          return !x.product_id || (x.product_id === x.itemId);
+                        });
+                      if (invalidProducts.length > 0) {
+                        console.error('[BonCommandeModule] Blocking sale confirmation: invalid product_id - items must be selected from dropdown', invalidProducts);
+                        const invalidItemNames = invalidProducts.map((x: any) => `"${x.name}"`).join(', ');
+                        toast.error(`❌ Produit(s) non sélectionné(s) depuis la liste: ${invalidItemNames}. Veuillez cliquer sur chaque produit dans le dropdown.`);
                         setLoading(false);
                         return;
                       }
@@ -2452,10 +2488,9 @@ export default function BonCommandeModule({ session, onBack, sale, adminSelected
                     proceed();
                   }}
                   disabled={loading}
-                  className="w-full"
+                  className="w-full h-10 rounded-md bg-emerald-600 text-white font-semibold text-sm hover:opacity-90"
                   style={{ backgroundColor: '#10b981', color: 'white' }}
-                className="w-full h-10 rounded-md bg-emerald-600 text-white font-semibold text-sm hover:opacity-90"
-              >
+                >
                   <Download className="w-4 h-4 mr-2" />
                   {loading ? 'Génération...' : 'Générer PDF'}
                 </Button>

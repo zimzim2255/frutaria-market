@@ -1715,17 +1715,43 @@ export function CashManagementPage({ session }: CashManagementPageProps) {
       });
     }
 
-    // Filter by date range
-    if (filterStartDate) {
-      const startDate = new Date(filterStartDate);
-      startDate.setHours(0, 0, 0, 0);
-      filtered = filtered.filter((p) => new Date(p.date) >= startDate);
-    }
-
-    if (filterEndDate) {
-      const endDate = new Date(filterEndDate);
-      endDate.setHours(23, 59, 59, 999);
-      filtered = filtered.filter((p) => new Date(p.date) <= endDate);
+    // Filter by date range - use p.date for filtering
+    if (filterStartDate || filterEndDate) {
+      filtered = filtered.filter((p) => {
+        if (!p.date) return false; // No date available, exclude
+        
+        const expenseDate = new Date(p.date);
+        expenseDate.setHours(0, 0, 0, 0);
+        
+        // If only start date is set (no end date), treat it as filtering for that specific day only
+        if (filterStartDate && !filterEndDate) {
+          const targetDate = new Date(filterStartDate);
+          targetDate.setHours(0, 0, 0, 0);
+          return expenseDate.getTime() === targetDate.getTime();
+        }
+        
+        // If only end date is set (no start date), treat it as filtering for that specific day only
+        if (filterEndDate && !filterStartDate) {
+          const targetDate = new Date(filterEndDate);
+          targetDate.setHours(0, 0, 0, 0);
+          return expenseDate.getTime() === targetDate.getTime();
+        }
+        
+        // If both dates are set, use range filtering
+        if (filterStartDate) {
+          const startDate = new Date(filterStartDate);
+          startDate.setHours(0, 0, 0, 0);
+          if (expenseDate < startDate) return false;
+        }
+        
+        if (filterEndDate) {
+          const endDate = new Date(filterEndDate);
+          endDate.setHours(0, 0, 0, 0);
+          if (expenseDate > endDate) return false;
+        }
+        
+        return true;
+      });
     }
 
     // Filter by amount sign / credit (apply after store/date filters)
