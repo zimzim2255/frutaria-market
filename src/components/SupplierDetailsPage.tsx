@@ -1497,7 +1497,11 @@ export function SupplierDetailsPage({ supplier, session, onBack, onSupplierUpdat
       });
     });
 
-    const rowsForExport = rows.sort((a: any, b: any) => a._sort - b._sort);
+    const rowsForExport = rows
+      .sort((a: any, b: any) => a._sort - b._sort)
+      // Exclude ONLY "Paiement" rows with 0.00 amounts (ledger-only corrections)
+      // Keep all other transaction types (Achats, Avances, Remises)
+      .filter((r: any) => !(r._type === 'Paiement' && Math.abs(Number(r._amount || 0)) < 0.01));
 
     // Summary totals
     // Supplier "paid" must include BOTH:

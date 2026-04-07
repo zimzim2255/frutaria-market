@@ -7007,7 +7007,7 @@ if (!existingInv?.id) {
       payment_method: body.payment_method || null,
       reference,
       notes: body.notes || null,
-      passage_date: body.passage_date || new Date().toISOString(),
+      passage_date: body.passage_date !== undefined && body.passage_date !== null && body.passage_date !== '' ? body.passage_date : new Date().toISOString().split('T')[0],
       created_by: currentUser.id,
       created_by_email: currentUser.email,
       created_by_role: currentUser.role,
@@ -7042,6 +7042,8 @@ if (!existingInv?.id) {
           reason: `Paiement Fournisseur Passage: ${supplierId}`,
           expense_type: "supplier_passage",
           created_by: currentUser.id,
+          // Use the custom passage_date if provided, otherwise use created_at
+          payment_date: insertRow.passage_date || null,
         };
 
         const { error: expenseErr } = await supabase
@@ -7125,6 +7127,7 @@ if (!existingInv?.id) {
         payment_method: body.payment_method || "cash",
         reference_number,
         notes: body.notes ? `PASSAGE • ${body.notes}` : "PASSAGE",
+        payment_date: body.passage_date || null,
         created_by: currentUser.id,
         // DO NOT set created_by_email here because some DBs don't have that column.
         // (POST /payments sets it, but your production schema cache indicates it's missing.)

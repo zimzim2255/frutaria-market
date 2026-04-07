@@ -866,9 +866,15 @@ export default function StockReferenceHistoryModule({ session }: { session: any 
 
                           if (!bulkResp.ok) {
                             const t = await bulkResp.text().catch(() => '');
-                            console.error('Failed to bulk update supplier by stock_reference:', t);
-                            toast.error("Erreur lors de l'enregistrement (mise à jour fournisseur)");
-                            return;
+                            // If no history rows exist (404 "No history rows found"), that's OK - not an error
+                            // Only show error for actual problems
+                            if (bulkResp.status !== 404 || !t.includes('No history rows found')) {
+                              console.error('Failed to bulk update supplier by stock_reference:', t);
+                              toast.error("Erreur lors de l'enregistrement (mise à jour fournisseur)");
+                              return;
+                            }
+                            // 404 with "No history rows" is expected/OK - silently continue
+                            console.log('No product additions history rows to update - this is expected for new stock references');
                           }
                         }
 
@@ -1556,8 +1562,14 @@ export default function StockReferenceHistoryModule({ session }: { session: any 
                     if (!bulkResp.ok) {
                       const t = await bulkResp.text().catch(() => '');
                       console.error('Failed to bulk update supplier by stock_reference:', t);
-                      toast.error("Erreur lors de l'enregistrement (mise à jour fournisseur)");
-                      return;
+                      // If no history rows exist for this stock_reference, continue anyway
+                      // Individual product updates will handle remaining changes
+                      if (!t.includes('No history rows found')) {
+                        toast.error("Erreur lors de l'enregistrement (mise à jour fournisseur)");
+                        return;
+                      } else {
+                        console.warn('No history rows for this stock_reference, continuing with individual updates');
+                      }
                     }
                   }
 
@@ -1630,13 +1642,6 @@ export default function StockReferenceHistoryModule({ session }: { session: any 
                       } else {
                         toast.error("Erreur lors de l'enregistrement");
                       }
-                      return;
-                    }
-
-                    if (!r.ok) {
-                      const t = await r.text().catch(() => '');
-                      console.error('Failed to update product:', t);
-                      toast.error("Erreur lors de l'enregistrement");
                       return;
                     }
                   }

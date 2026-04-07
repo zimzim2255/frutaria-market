@@ -1258,7 +1258,7 @@ export function CashManagementPage({ session }: CashManagementPageProps) {
           allPayments.push({
             // Ensure unique ids so they don't de-dupe with generic `expense-*` entries.
             id: `supplier-passage-${e.id}`,
-            date: e.created_at,
+            date: e.passage_date || e.payment_date || e.created_at,
             store_id: e.store_id || null,
             amount: signedAmount,
             reason: e.reason || e.category || reasonText,

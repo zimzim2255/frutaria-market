@@ -20,8 +20,14 @@ cd ..
 ### Step 3️⃣: Upload & Deploy
 ```bash
 scp frutaria-build.zip ubuntu@187.124.40.28:/tmp/
-ssh ubuntu@187.124.40.28 "cd /tmp && rm -rf index.html assets && unzip -o frutaria-build.zip && sudo cp -r index.html /var/www/frutaria-market/ && sudo cp -r assets/* /var/www/frutaria-market/assets/ && sudo chown -R www-data:www-data /var/www/frutaria-market && sudo chmod -R 755 /var/www/frutaria-market && sudo systemctl restart nginx && echo '✅ DEPLOYMENT COMPLETE'"
+ssh ubuntu@187.124.40.28 "sudo rm -rf /var/www/frutaria-market/assets && mkdir -p /tmp/deploy-fresh && cd /tmp/deploy-fresh && rm -f * && unzip -o /tmp/frutaria-build.zip && sudo cp index.html /var/www/frutaria-market/ && sudo cp -r assets/* /var/www/frutaria-market/assets/ && sudo chown -R www-data:www-data /var/www/frutaria-market && sudo chmod -R 755 /var/www/frutaria-market && sudo systemctl restart nginx && echo '✅ DEPLOYMENT COMPLETE'"
 ```
+
+⚠️ **KEY:** This command:
+1. **REMOVES old assets** - No file conflicts!
+2. **Uses fresh temp folder** - Avoids mixing old/new files
+3. **Restarts nginx** - Ensures fresh asset delivery
+4. **Verifies permissions** - Files served correctly
 
 ---
 
@@ -57,28 +63,40 @@ Run from your LOCAL machine:
 scp frutaria-build.zip ubuntu@187.124.40.28:/tmp/
 ```
 
-### STEP 5: Deploy on Server
+### STEP 5: Deploy on Server (CLEAN DEPLOYMENT)
 SSH into server:
 ```bash
 ssh ubuntu@187.124.40.28
 ```
 
+**CRITICAL: Remove old assets first** to avoid mixing old/new versions:
+```bash
+sudo rm -rf /var/www/frutaria-market/assets
+```
+
+Create fresh temp directory for extraction:
+```bash
+mkdir -p /tmp/deploy-fresh
+cd /tmp/deploy-fresh
+rm -f *
+```
+
 Extract and deploy:
 ```bash
-cd /tmp
-rm -rf index.html assets
-unzip -o frutaria-build.zip
+unzip -o /tmp/frutaria-build.zip
 
-# Copy files
-sudo cp -r index.html /var/www/frutaria-market/
-sudo cp -r assets/* /var/www/frutaria-market/assets/
+# Copy fresh files
+sudo cp index.html /var/www/frutaria-market/
+sudo cp -r assets /var/www/frutaria-market/
 
 # Fix permissions
 sudo chown -R www-data:www-data /var/www/frutaria-market
 sudo chmod -R 755 /var/www/frutaria-market
 
-# Restart web server
+# Restart nginx with fresh cache
 sudo systemctl restart nginx
+
+echo "✅ DEPLOYMENT COMPLETE"
 ```
 
 ### STEP 6: Verify Deployment
@@ -126,6 +144,23 @@ Visit:
 - Clear browser cache: **Ctrl+F5**
 - Check permissions: `sudo ls -lah /var/www/frutaria-market/`
 - Check nginx: `sudo systemctl status nginx`
+
+### "Still seeing old version after deployment"
+❌ Problem: Old asset files mixed with new ones on server
+✅ This happens when old assets aren't removed before deploying new build
+✅ Solutions:
+1. **FIRST:** SSH and remove old assets:
+   ```bash
+   ssh ubuntu@187.124.40.28
+   sudo rm -rf /var/www/frutaria-market/assets
+   ```
+2. **THEN:** Re-deploy using the clean deployment command (Step 3)
+3. **Browser:** Hard refresh **Ctrl+Shift+R** to clear browser cache
+4. **Verify:** Check asset filenames show NEW hash values:
+   ```bash
+   ls -lah /var/www/frutaria-market/assets/
+   ```
+   Should see files like `index-DFFtF2Iq.js` (NEW) not `index-D3Glha7A.js` (OLD)
 
 ### "Permission denied" errors
 ❌ Problem: Files don't have correct owner/permissions
@@ -202,6 +237,40 @@ sudo cp index.html /var/www/frutaria-market/
    ```bash
    ssh ubuntu@187.124.40.28 "sudo systemctl status nginx && echo '---' && ls -lah /var/www/frutaria-market/"
    ```
+
+---
+
+## ✨ DEPLOYMENT BEST PRACTICES
+
+### Before Every Deployment:
+- [ ] Run `npm run build` and verify no errors
+- [ ] Check zip is ~0.65 MB
+- [ ] Verify `index.html` and `assets/` are in zip
+- [ ] Test changes locally if possible
+
+### During Deployment:
+- [ ] **ALWAYS remove old assets first:**
+  ```bash
+  sudo rm -rf /var/www/frutaria-market/assets
+  ```
+- [ ] Use fresh temp directory to avoid file conflicts
+- [ ] Verify file hashes are NEW (not OLD ones)
+- [ ] Restart nginx to clear any cache
+
+### After Deployment:
+- [ ] Hard refresh browser: **Ctrl+Shift+R**
+- [ ] Check browser console for errors (F12)
+- [ ] Verify assets load (check Network tab)
+- [ ] Test all major features
+
+### Why Old Version Still Shows?
+🔴 **Common Cause:** Old asset files (with old hash names like `index-D3Glha7A.js`) still exist alongside new ones (like `index-DFFtF2Iq.js`)
+
+🟢 **Solution:**
+1. Remove old assets: `sudo rm -rf /var/www/frutaria-market/assets`
+2. Deploy fresh build
+3. Restart nginx: `sudo systemctl restart nginx`
+4. Hard refresh browser: `Ctrl+Shift+R`
 
 ---
 

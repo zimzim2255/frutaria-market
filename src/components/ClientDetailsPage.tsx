@@ -1318,7 +1318,13 @@ export function ClientDetailsPage({ client, session, onBack }: ClientDetailsPage
 
       const rows = allTransactions
         // Include both Transaction + Audit (global payments) in the report table
-        .filter((t) => t.category === 'Transaction' || t.category === 'Audit')
+        // Exclude ONLY global payments with 0.00 amounts (ledger-only records, historical entries)
+        // Keep all invoices, sales/BLs, remises, etc. even if 0.00
+        .filter((t) => (t.category === 'Transaction' || t.category === 'Audit') && 
+                       !(t.type === 'Paiement Global' && 
+                         Math.abs(Number(t.totalAmount || 0)) < 0.01 && 
+                         Math.abs(Number(t.amountPaid || 0)) < 0.01 && 
+                         Math.abs(Number(t.discountAmount || 0)) < 0.01))
         .map((t) => {
           // Map transaction into the screenshot columns
           const typePaiement = (() => {
@@ -1506,7 +1512,13 @@ export function ClientDetailsPage({ client, session, onBack }: ClientDetailsPage
       const rows = allTransactions
         // Do NOT print the cheque table/rows in the PDF report.
         // Keep only invoices/sales + audit (global payments/remises).
-        .filter((t) => (t.category === 'Transaction' || t.category === 'Audit') && String(t.type || '').toLowerCase() !== 'chèque' && String(t.type || '').toLowerCase() !== 'cheque')
+        // Exclude ONLY global payments with 0.00 amounts (ledger-only records, historical entries)
+        // Keep all invoices, sales/BLs, remises, etc. even if 0.00
+        .filter((t) => (t.category === 'Transaction' || t.category === 'Audit') && String(t.type || '').toLowerCase() !== 'chèque' && String(t.type || '').toLowerCase() !== 'cheque' && 
+                       !(t.type === 'Paiement Global' && 
+                         Math.abs(Number(t.totalAmount || 0)) < 0.01 && 
+                         Math.abs(Number(t.amountPaid || 0)) < 0.01 && 
+                         Math.abs(Number(t.discountAmount || 0)) < 0.01))
         .map((t: any) => {
           const typePaiement = (() => {
             // Keep this column VERY compact because long notes can consume whole pages.
