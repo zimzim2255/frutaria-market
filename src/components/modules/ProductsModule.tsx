@@ -1800,6 +1800,31 @@ export function ProductsModule({ session }: ProductsModuleProps) {
   const totalValue = sortedProducts.reduce((sum: number, p: any) => sum + (p.quantity_available * p.purchase_price), 0);
   const totalItems = sortedProducts.reduce((sum: number, p: any) => sum + p.quantity_available, 0);
 
+  // Helper function to get the correct quantity for export (store-specific or global)
+  const getExportQuantity = (product: any): number => {
+    // Determine the effective store context for the export
+    const isAdminRole = String(effectiveUserRole || 'user').toLowerCase() === 'admin';
+    
+    // If admin with a specific store filtered
+    if (isAdminRole && storeFilter !== 'all' && product.store_stocks) {
+      const storeSpecificQty = product.store_stocks[String(storeFilter)];
+      if (storeSpecificQty !== undefined && storeSpecificQty !== null) {
+        return Number(storeSpecificQty);
+      }
+    }
+    
+    // If non-admin with a store assigned, use store-specific quantity
+    if (!isAdminRole && effectiveUserStoreId && product.store_stocks) {
+      const storeSpecificQty = product.store_stocks[String(effectiveUserStoreId)];
+      if (storeSpecificQty !== undefined && storeSpecificQty !== null) {
+        return Number(storeSpecificQty);
+      }
+    }
+    
+    // Fallback to global quantity
+    return Number(product.quantity_available ?? 0);
+  };
+
   const handleExportExcel = () => {
     try {
       if (selectedProducts.size === 0) {
@@ -1825,14 +1850,17 @@ export function ProductsModule({ session }: ProductsModuleProps) {
 
           const base = String(label);
 
+          // Get the correct quantity (store-specific or global)
+          const qty = getExportQuantity(p);
+
           // If name/ref is disabled, allow "quantity only" export
           if (!pdfExportOptions.includeNames) {
-            return pdfExportOptions.includeQuantities ? `Qté: ${Number(p.quantity_available ?? 0)}` : '';
+            return pdfExportOptions.includeQuantities ? `Qté: ${qty}` : '';
           }
 
           // Name/ref enabled
           if (!pdfExportOptions.includeQuantities) return base;
-          return `${base}\nQté: ${Number(p.quantity_available ?? 0)}`;
+          return `${base}\nQté: ${qty}`;
         };
 
         excelRows.push({
@@ -1895,7 +1923,8 @@ export function ProductsModule({ session }: ProductsModuleProps) {
         const product1 = selectedProductsList[i];
         let cell1 = product1.name || product1.reference || 'N/A';
         if (pdfExportOptions.includeQuantities) {
-          cell1 += `\nQté: ${product1.quantity_available}`;
+          const qty1 = getExportQuantity(product1);
+          cell1 += `\nQté: ${qty1}`;
         }
         row.push(cell1);
         
@@ -1904,7 +1933,8 @@ export function ProductsModule({ session }: ProductsModuleProps) {
           const product2 = selectedProductsList[i + 1];
           let cell2 = product2.name || product2.reference || 'N/A';
           if (pdfExportOptions.includeQuantities) {
-            cell2 += `\nQté: ${product2.quantity_available}`;
+            const qty2 = getExportQuantity(product2);
+            cell2 += `\nQté: ${qty2}`;
           }
           row.push(cell2);
         } else {
