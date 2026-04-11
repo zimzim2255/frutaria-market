@@ -1727,13 +1727,34 @@ async function handler(req: Request): Promise<Response> {
       let products: any[] = [];
 
       if (currentUser.role === "admin" && !effectiveStoreId) {
-        const { data, error: productsError } = await supabase
-          .from("products")
-          .select("*")
-          .order("created_at", { ascending: false });
+        // Fetch all products in chunks (Supabase REST has 1000 row default limit)
+        const CHUNK_SIZE = 1000;
+        let products_accumulated: any[] = [];
+        let offset = 0;
+        let hasMore = true;
 
-        if (productsError) throw productsError;
-        products = data || [];
+        while (hasMore) {
+          const { data, error: productsError } = await supabase
+            .from("products")
+            .select("*")
+            .order("created_at", { ascending: false })
+            .range(offset, offset + CHUNK_SIZE - 1);
+
+          if (productsError) throw productsError;
+
+          if (!data || data.length === 0) {
+            hasMore = false;
+          } else {
+            products_accumulated.push(...data);
+            if (data.length < CHUNK_SIZE) {
+              hasMore = false;
+            }
+            offset += CHUNK_SIZE;
+          }
+        }
+
+        console.log(`[/products GET] Fetched ${products_accumulated.length} products in ${Math.ceil(products_accumulated.length / CHUNK_SIZE)} chunks (admin, no store filter)`);
+        products = products_accumulated;
       } else {
         if (!effectiveStoreId) {
           // No magasin => no stock visibility
@@ -4009,19 +4030,37 @@ async function handler(req: Request): Promise<Response> {
       const metaStoreId = String((currentUser as any)?.user_metadata?.store_id || '').trim() || null;
       const myStoreId = (currentUser.store_id ? String(currentUser.store_id).trim() : null) || metaStoreId;
 
-      let q = supabase
-        .from("product_templates")
-        .select("*")
-        .order("created_at", { ascending: false });
+      // Supabase REST API has a default limit of 1000 rows.
+      // To fetch all templates, we use offset-based pagination in chunks.
+      const CHUNK_SIZE = 1000;
+      let templates_accumulated: any[] = [];
+      let offset = 0;
+      let hasMore = true;
 
-      // Visibility rule changed:
-      // Everyone can see ALL product templates (no store/creator scoping).
-      // No filtering by store_id/created_by.
+      while (hasMore) {
+        const { data, error } = await supabase
+          .from("product_templates")
+          .select("*")
+          .order("created_at", { ascending: false })
+          .range(offset, offset + CHUNK_SIZE - 1);
 
-      const { data, error } = await q;
-      if (error) throw error;
+        if (error) throw error;
 
-      return jsonResponse({ templates: data || [] });
+        if (!data || data.length === 0) {
+          hasMore = false;
+        } else {
+          templates_accumulated.push(...data);
+          // If we got fewer rows than requested, we've reached the end
+          if (data.length < CHUNK_SIZE) {
+            hasMore = false;
+          }
+          offset += CHUNK_SIZE;
+        }
+      }
+
+      console.log(`[/product-templates GET] Fetched ${templates_accumulated.length} templates in ${Math.ceil(templates_accumulated.length / CHUNK_SIZE)} chunks`);
+
+      return jsonResponse({ templates: templates_accumulated || [] });
     } catch (error: any) {
       console.error("Error fetching product templates:", error);
       return jsonResponse({ error: error.message }, 500);

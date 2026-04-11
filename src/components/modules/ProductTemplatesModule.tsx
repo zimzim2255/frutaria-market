@@ -36,6 +36,7 @@ export function ProductTemplatesModule({ session }: ProductTemplatesModuleProps)
   const [editingTemplate, setEditingTemplate] = useState<any>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('all');
+  const [displayLimit, setDisplayLimit] = useState(100);
   const [categories, setCategories] = useState<string[]>([]);
   const [formData, setFormData] = useState({
     name: '',
@@ -141,7 +142,7 @@ export function ProductTemplatesModule({ session }: ProductTemplatesModuleProps)
         setTemplates(data.templates || []);
         
         // Extract unique categories
-        const uniqueCategories: string[] = [...new Set((data.templates || []).map((t: any) => t.category))];
+        const uniqueCategories = [...new Set((data.templates || []).map((t: any) => t.category))];
         setCategories(uniqueCategories.sort());
       } else {
         toast.error('Erreur lors du chargement des modèles');
@@ -204,6 +205,11 @@ export function ProductTemplatesModule({ session }: ProductTemplatesModuleProps)
     fetchTemplates();
     fetchSuppliers();
   }, []);
+
+  // Reset pagination when filters change
+  useEffect(() => {
+    setDisplayLimit(100);
+  }, [searchTerm, categoryFilter]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -359,6 +365,9 @@ export function ProductTemplatesModule({ session }: ProductTemplatesModuleProps)
 
     return matchesSearch && matchesCategory;
   });
+
+  // Paginated templates (display only first `displayLimit` items)
+  const paginatedTemplates = filteredTemplates.slice(0, displayLimit);
 
   if (!canViewTemplates) {
     return (
@@ -704,7 +713,7 @@ export function ProductTemplatesModule({ session }: ProductTemplatesModuleProps)
                       </TableCell>
                     </TableRow>
                   ) : (
-                    filteredTemplates.map((template) => (
+                    paginatedTemplates.map((template) => (
                       <TableRow key={template.id}>
                         <TableCell>
                           {template.photo_url ? (
@@ -782,6 +791,19 @@ export function ProductTemplatesModule({ session }: ProductTemplatesModuleProps)
                   )}
                 </TableBody>
               </Table>
+              
+              {/* Voir plus button */}
+              {filteredTemplates.length > displayLimit && (
+                <div className="flex justify-center mt-4">
+                  <Button
+                    onClick={() => setDisplayLimit((prev) => prev + 100)}
+                    variant="outline"
+                    className="bg-blue-50 text-blue-700 hover:bg-blue-100 border-blue-300"
+                  >
+                    Voir plus ({filteredTemplates.length - displayLimit} restants)
+                  </Button>
+                </div>
+              )}
             </div>
           )}
         </CardContent>
