@@ -89,13 +89,43 @@ export function SupplierDetailsPage({ supplier, session, onBack, onSupplierUpdat
   const [correctDiscountNewAmount, setCorrectDiscountNewAmount] = useState<string>('');
   const [correctDiscountReason, setCorrectDiscountReason] = useState<string>('');
 
-  // Enable correction buttons for all users for testing
-  // TODO: Restore role check after testing
+  // User role (fetched from database - source of truth)
+  const [userRole, setUserRole] = useState<string>('user');
+
+  // Fetch user role from database (like AdminDashboard does)
+  useEffect(() => {
+    if (!session?.access_token) return;
+
+    const fetchUserRole = async () => {
+      try {
+        const response = await fetch(
+          `https://${projectId}.supabase.co/functions/v1/super-handler/users`,
+          {
+            headers: {
+              'Authorization': `Bearer ${session.access_token}`,
+            },
+          }
+        );
+
+        if (response.ok) {
+          const data = await response.json();
+          const currentUser = data.users?.find((u: any) => u.email === session.user?.email);
+          const role = currentUser?.role || 'user';
+          setUserRole(role);
+        }
+      } catch (error) {
+        console.error('Error fetching user role:', error);
+        setUserRole('user');
+      }
+    };
+
+    fetchUserRole();
+  }, [session?.access_token, session?.user?.email]);
+
+  // Enable correction buttons only for admin
   const isAdminLike = useMemo(() => {
-    return true; // Temporarily enable for all users
-    // const role = String(session?.user?.user_metadata?.role || '').toLowerCase();
-    // return role === 'admin' || role === 'manager' || role === 'magasin_manager';
-  }, [session]);
+    return userRole === 'admin';
+  }, [userRole]);
   const [productsLoading, setProductsLoading] = useState<boolean>(false);
   const [productsSearch, setProductsSearch] = useState<string>('');
 
@@ -244,8 +274,8 @@ export function SupplierDetailsPage({ supplier, session, onBack, onSupplierUpdat
 
       // Sort newest first (UI expectation)
       const list = (filtered || []).slice().sort((a: any, b: any) => {
-        const da = new Date(a?.created_at || 0).getTime();
-        const db = new Date(b?.created_at || 0).getTime();
+        const da = new Date(a?.operation_date || a?.created_at || 0).getTime();
+        const db = new Date(b?.operation_date || b?.created_at || 0).getTime();
         return db - da;
       });
 
@@ -2847,12 +2877,15 @@ export function SupplierDetailsPage({ supplier, session, onBack, onSupplierUpdat
                             <td className="px-6 py-4 text-sm text-center text-gray-600">
                               {(() => {
                                 const times = (group.products || [])
-                                  .map((p: any) => (p?.created_at ? new Date(p.created_at).getTime() : NaN))
+                                  .map((p: any) => {
+                                    const dateToUse = p?.operation_date || p?.created_at;
+                                    return dateToUse ? new Date(dateToUse).getTime() : NaN;
+                                  })
                                   .filter((t: number) => Number.isFinite(t));
 
                                 if (times.length === 0) return '-';
 
-                                const t0 = Math.min(...times);
+                                const t0 = Math.max(...times);
                                 return new Date(t0).toLocaleDateString('fr-FR');
                               })()}
                             </td>

@@ -435,11 +435,13 @@ export function SalesHistoryModule({ session }: SalesHistoryModuleProps) {
 
   // Filter sales based on search and filters
   const filteredSales = sales.filter(sale => {
+    const clientName = (sale as any).client_name || (sale as any).client?.name || (sale as any).clients?.name || '';
     const matchesSearch = 
       sale.sale_number?.toLowerCase().includes(searchTerm.toLowerCase()) ||
       sale.stores?.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
       String((sale as any).store_name || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-      String((sale as any).store?.name || '').toLowerCase().includes(searchTerm.toLowerCase());
+      String((sale as any).store?.name || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+      clientName.toLowerCase().includes(searchTerm.toLowerCase());
 
     // Admin magasin selector filter: if admin picked a magasin, only show that magasin's sales.
     const matchesMagasin = isAdmin && selectedMagasinForAdmin
@@ -777,7 +779,7 @@ export function SalesHistoryModule({ session }: SalesHistoryModuleProps) {
                   <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
                   <Input
                     id="search"
-                    placeholder="N° vente ou magasin..."
+                    placeholder="N° vente, magasin ou client..."
                     className="pl-10"
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
