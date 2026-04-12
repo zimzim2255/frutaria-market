@@ -312,6 +312,7 @@ async function resolveSupplierIdForProductAdditionHistory(params: {
 
 async function insertProductAdditionHistoryRow(params: {
   created_at?: string;
+  operation_date?: string | null;
   created_by: string | null;
   created_by_email: string | null;
   store_id: string | null;
@@ -333,6 +334,7 @@ async function insertProductAdditionHistoryRow(params: {
 }) {
   const payload = {
     created_at: params.created_at || new Date().toISOString(),
+    operation_date: params.operation_date || null,
     created_by: params.created_by,
     created_by_email: params.created_by_email,
     store_id: params.store_id,
@@ -2291,6 +2293,7 @@ async function handler(req: Request): Promise<Response> {
 
         await insertProductAdditionHistoryRow({
           created_at: new Date().toISOString(),
+          operation_date: body.operation_date ? String(body.operation_date).trim() : null,
           created_by: authUser?.id || null,
           created_by_email: authUser?.email || null,
           store_id: effectiveStoreId,
@@ -2518,6 +2521,7 @@ async function handler(req: Request): Promise<Response> {
 
         await insertProductAdditionHistoryRow({
         created_at: new Date().toISOString(),
+        operation_date: body.operation_date ? String(body.operation_date).trim() : null,
         created_by: authUser?.id || null,
         created_by_email: authUser?.email || null,
         store_id: effectiveStoreId,
@@ -2828,6 +2832,7 @@ async function handler(req: Request): Promise<Response> {
 
           await insertProductAdditionHistoryRow({
             created_at: newProduct.created_at || new Date().toISOString(),
+            operation_date: body.operation_date ? String(body.operation_date).trim() : null,
             created_by: currentUserWithRole?.id || null,
             created_by_email: currentUserWithRole?.email || null,
             store_id: resolvedStoreId || null,
@@ -2982,6 +2987,7 @@ async function handler(req: Request): Promise<Response> {
 
             await insertProductAdditionHistoryRow({
               created_at: new Date().toISOString(),
+              operation_date: body.operation_date ? String(body.operation_date).trim() : null,
               created_by: currentUserWithRole?.id || null,
               created_by_email: currentUserWithRole?.email || null,
               store_id: resolvedStoreId || null,
@@ -10380,6 +10386,40 @@ if (!existingInv?.id) {
           .from("check_inventory")
           .update({ amount_used: newAmount })
           .eq("id", existingPayment.check_id);
+      }
+
+      // For non-check payments (cash, bank transfer), update the caisse_out_* expense
+      if (!existingPayment.check_id && amountDiff !== 0) {
+        const paymentMethod = String(existingPayment.payment_method || 'cash').toLowerCase();
+        const storeId = existingPayment.paid_by_store_id || existingPayment.store_id;
+        
+        // Determine the expense type based on payment method
+        let expenseType = 'caisse_out_cash';
+        if (paymentMethod.includes('bank') || paymentMethod.includes('virement')) {
+          expenseType = 'caisse_out_bank_transfer';
+        } else if (paymentMethod.includes('check') || paymentMethod.includes('chèque')) {
+          expenseType = 'caisse_out_check';
+        }
+
+        // Find and update the corresponding caisse_out_* expense
+        const { data: caaisseExpenses, error: fetchCaisseErr } = await supabase
+          .from('expenses')
+          .select('id')
+          .eq('store_id', storeId)
+          .eq('expense_type', expenseType)
+          .like('notes', `%payment_id=${paymentId}%`)
+          .limit(1);
+
+        if (!fetchCaisseErr && caaisseExpenses && caaisseExpenses.length > 0) {
+          const { error: caisseUpdateErr } = await supabase
+            .from('expenses')
+            .update({ amount: -Math.abs(newAmount) })
+            .eq('id', caaisseExpenses[0].id);
+
+          if (caisseUpdateErr) {
+            console.error('Failed to update caisse_out expense:', caisseUpdateErr);
+          }
+        }
       }
 
       // For passage payments (reference starts with "PASSAGE-"), also update the existing expense and create cash flow adjustment
