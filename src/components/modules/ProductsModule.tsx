@@ -1593,6 +1593,13 @@ export function ProductsModule({ session }: ProductsModuleProps) {
         if (isAdminRole && storeFilter !== 'all') {
           return Number(product.store_stocks[String(storeFilter)] ?? 0) || 0;
         }
+        if (isAdminRole && storeFilter === 'all') {
+          // When viewing all stores, use the sum of all store stocks
+          const sum = Object.values(product.store_stocks).reduce((acc: number, val: any) => {
+            return acc + (Number(val) || 0);
+          }, 0);
+          return sum;
+        }
       }
       return Number(product.quantity_available ?? 0) || 0;
     })();
@@ -1811,6 +1818,14 @@ export function ProductsModule({ session }: ProductsModuleProps) {
       if (storeSpecificQty !== undefined && storeSpecificQty !== null) {
         return Number(storeSpecificQty);
       }
+    }
+    
+    // If admin viewing all stores, sum all store stocks
+    if (isAdminRole && storeFilter === 'all' && product.store_stocks) {
+      const sum = Object.values(product.store_stocks).reduce((acc: number, val: any) => {
+        return acc + (Number(val) || 0);
+      }, 0);
+      return sum;
     }
     
     // If non-admin with a store assigned, use store-specific quantity
