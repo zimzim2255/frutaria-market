@@ -808,6 +808,29 @@ export function CashManagementPage({ session }: CashManagementPageProps) {
         console.warn('Error fetching users:', error);
       }
 
+      // Fetch suppliers to map IDs to names (for supplier passage expenses display)
+      const supplierNameById: { [key: string]: string } = {};
+      try {
+        const suppliersRes = await fetch(`https://${projectId}.supabase.co/functions/v1/super-handler/suppliers`, {
+          headers: {
+            Authorization: `Bearer ${session.access_token}`,
+          },
+        });
+
+        if (suppliersRes.ok) {
+          const suppliersData = await suppliersRes.json();
+          const suppliersList = suppliersData.suppliers || [];
+
+          suppliersList.forEach((supplier: any) => {
+            if (supplier.id && supplier.name) {
+              supplierNameById[supplier.id] = supplier.name;
+            }
+          });
+        }
+      } catch (error) {
+        console.warn('Error fetching suppliers:', error);
+      }
+
       // Fetch remises from discounts table
       // NOTE: the backend schema differs across deployments.
       // For linking remises to global payments we accept ANY of:
@@ -1255,13 +1278,26 @@ export function CashManagementPage({ session }: CashManagementPageProps) {
           const refMatch = notes.match(/reference=([^|\s]+)/);
           const customReference = refMatch ? refMatch[1] : null;
 
+          // Resolve supplier UUID in reason to supplier name (for backward compatibility)
+          const rawReason = e.reason || e.category || reasonText;
+          const resolvedReason = (() => {
+            const uuidMatch = rawReason?.match(/Paiement Fournisseur Passage: ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i);
+            if (uuidMatch && uuidMatch[1]) {
+              const supplierName = supplierNameById[uuidMatch[1]];
+              if (supplierName) {
+                return `Paiement Fournisseur Passage: ${supplierName}`;
+              }
+            }
+            return rawReason;
+          })();
+
           allPayments.push({
             // Ensure unique ids so they don't de-dupe with generic `expense-*` entries.
             id: `supplier-passage-${e.id}`,
             date: e.passage_date || e.payment_date || e.created_at,
             store_id: e.store_id || null,
             amount: signedAmount,
-            reason: e.reason || e.category || reasonText,
+            reason: resolvedReason,
             source_type: 'facture',
             source_id: e.id,
             payment_method: 'cash',

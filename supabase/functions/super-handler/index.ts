@@ -3674,9 +3674,10 @@ async function handler(req: Request): Promise<Response> {
     const requestedStoreId = getEffectiveStoreIdFromQuery(req);
 
     if (isAdmin) {
-      // Default admin caisse to their own store to avoid a global caisse.
-      const fallbackStoreId = currentUser?.store_id ? String(currentUser.store_id) : null;
-      return { role, isAdmin: true, storeId: requestedStoreId || fallbackStoreId };
+      // FIX: Allow admin to see ALL stores by default.
+      // Admin can request a specific store with ?store_id=STORE_ID parameter.
+      // When no store_id is provided, return null to show ALL stores.
+      return { role, isAdmin: true, storeId: requestedStoreId || null };
     }
 
     const storeId = currentUser?.store_id ? String(currentUser.store_id) : null;
@@ -6578,6 +6579,7 @@ if (!existingInv?.id) {
   // GET  /client-global-payments?client_id=...
   // POST /client-global-payments
   // PUT  /client-global-payments/:id
+  // Pagination fix: Supabase caps at 1000 rows per request
   if (path === "/client-global-payments" && method === "GET") {
     try {
       const url = new URL(req.url);
@@ -6585,23 +6587,44 @@ if (!existingInv?.id) {
       const currentUser = await getCurrentUserWithRole(req);
       if (!currentUser) return jsonResponse({ error: "Unauthorized" }, 401);
 
-      let query = supabase
-        .from("client_global_payments")
-        .select("*")
-        .order("payment_date", { ascending: false })
-        .order("created_at", { ascending: false });
+      const role = String(currentUser.role || '').toLowerCase();
+      const metaStoreId = String((currentUser as any)?.user_metadata?.store_id || '').trim() || null;
+      const myStoreId = (currentUser.store_id ? String(currentUser.store_id).trim() : null) || metaStoreId;
 
-      if (clientId) query = query.eq("client_id", clientId);
+      const PAGE_SIZE = 1000;
+      const MAX_PAGES = 500;
+      let allRows: any[] = [];
+      let page = 0;
+      let hasMore = true;
 
-      if (currentUser.role !== "admin") {
-        if (!currentUser.store_id) return jsonResponse({ client_global_payments: [] });
-        query = query.eq("paid_by_store_id", currentUser.store_id);
+      while (hasMore && page < MAX_PAGES) {
+        let query = supabase
+          .from("client_global_payments")
+          .select("*")
+          .order("payment_date", { ascending: false })
+          .order("created_at", { ascending: false })
+          .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1);
+
+        if (clientId) query = query.eq("client_id", clientId);
+
+        if (role !== "admin") {
+          if (!myStoreId) return jsonResponse({ client_global_payments: [] });
+          query = query.eq("paid_by_store_id", myStoreId);
+        }
+
+        const { data, error } = await query;
+        if (error) throw error;
+
+        if (data && data.length > 0) {
+          allRows = allRows.concat(data);
+          hasMore = data.length === PAGE_SIZE;
+          page++;
+        } else {
+          hasMore = false;
+        }
       }
 
-      const { data, error } = await query;
-      if (error) throw error;
-
-      const rows = data || [];
+      const rows = allRows;
       const storeIds = Array.from(new Set(rows.map((r: any) => r?.paid_by_store_id).filter(Boolean).map((v: any) => String(v))));
       const userIds = Array.from(new Set(rows.map((r: any) => r?.created_by).filter(Boolean).map((v: any) => String(v))));
       const clientIds = Array.from(new Set(rows.map((r: any) => r?.client_id).filter(Boolean).map((v: any) => String(v))));
@@ -7018,7 +7041,7 @@ if (!existingInv?.id) {
       // Load supplier for authorization / store resolution
       const { data: supplier, error: supplierErr } = await supabase
         .from("suppliers")
-        .select("id, store_id")
+        .select("id, name, store_id")
         .eq("id", supplierId)
         .maybeSingle();
 
@@ -7080,11 +7103,13 @@ if (!existingInv?.id) {
       // 1) Create expense row (drives Caisse totals + Historique)
       // NOTE: this is a magasin/caisse expense, so it should NOT require or set coffer_id.
       {
+        const supplierName = supplier?.name ? String(supplier.name).trim() : supplierId;
         const expenseRow: any = {
           store_id: effectiveStoreId,
           amount,
           // Some DBs don't have `category` column (schema cache error). Use `reason` which exists.
-          reason: `Paiement Fournisseur Passage: ${supplierId}`,
+          // Store supplier name instead of UUID for better display in Cash Management
+          reason: `Paiement Fournisseur Passage: ${supplierName}`,
           expense_type: "supplier_passage",
           created_by: currentUser.id,
           // Use the custom passage_date if provided, otherwise use created_at
