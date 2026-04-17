@@ -276,7 +276,7 @@ ssh ubuntu@187.124.40.28
 
 ---
 
-### "No such file" when extracting
+### "No such frile" when extracting
 
 **Problem:** Unzip warning about backslashes
 ```
