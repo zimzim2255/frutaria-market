@@ -12,7 +12,7 @@ interface LoginScreenProps {
 }
 
 // Application version - update this when releasing new versions
-const APP_VERSION = 'v0.1.11';
+const APP_VERSION = 'v0.1.13';
 
 export function LoginScreen({ supabase }: LoginScreenProps) {
   const [email, setEmail] = useState('');
